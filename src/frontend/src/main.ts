@@ -7,7 +7,7 @@ type QuoteResponse = {
   subtotal:number; discountTotal:number; subtotalAfterDiscounts:number; tax:number; total:number;
 };
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5070';
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'https://localhost:61050';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 let plans: Plan[] = [];

@@ -1,16 +1,19 @@
 using System.Text.Json;
 using Application.Interfaces;
 using Domain.Entities;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using System.IO;
 
 namespace Infrastructure.Repositories;
 
 public class PricingRepository : IPricingRepository
 {
-    private readonly IWebHostEnvironment _env;
+    private readonly IHostEnvironment _env;
     private readonly ILogger<PricingRepository> _logger;
     private PricingCatalog? _cache;
 
-    public PricingRepository(IWebHostEnvironment env, ILogger<PricingRepository> logger)
+    public PricingRepository(IHostEnvironment env, ILogger<PricingRepository> logger)
     {
         _env = env;
         _logger = logger;
