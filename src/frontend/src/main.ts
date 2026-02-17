@@ -1,135 +1,474 @@
 import './style.css';
 
+type Tab = 'quote' | 'company' | 'history';
 type Plan = { id: string; nombre: string; precioBaseMensual: number; usuariosIncluidos: number; storageIncluidoGb: number };
 type Addon = { id: string; nombre: string; tipo: 'flat' | 'per_unit'; precio: number };
+type PricingRequest = {
+  planId: string;
+  users: number;
+  extraStorageGb: number;
+  addonIds: string[];
+  billingCycle: 'monthly' | 'annual';
+  taxRate: number;
+  prorationDays: number;
+};
 type QuoteResponse = {
-  currency: string; billingCycle: string; items: {label:string; amount:number}[]; discounts:{label:string; amount:number}[];
-  subtotal:number; discountTotal:number; subtotalAfterDiscounts:number; tax:number; total:number;
+  currency: string;
+  billingCycle: string;
+  items: { label: string; amount: number }[];
+  discounts: { label: string; amount: number }[];
+  subtotal: number;
+  tax: number;
+  total: number;
+};
+type CompanySettings = {
+  name: string;
+  rnc: string;
+  address: string;
+  phone: string;
+  email: string;
+  website: string;
+  currency: 'USD' | 'DOP';
+  legalNotes: string;
+  logoBase64: string;
+};
+type CustomerInfo = { name: string; company: string; email: string; phone: string; address: string };
+type QuoteMeta = { quoteNumber: string; issueDate: string; validDays: number; notes: string };
+type StoredQuote = {
+  id: string;
+  createdAt: string;
+  company: CompanySettings;
+  customer: CustomerInfo;
+  quoteMeta: QuoteMeta;
+  pricingRequest: PricingRequest;
+  pricingResult: QuoteResponse;
 };
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'https://localhost:61050';
-
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5070';
 const app = document.querySelector<HTMLDivElement>('#app')!;
+
+let activeTab: Tab = 'quote';
+let dark = localStorage.getItem('dark') === 'true';
 let plans: Plan[] = [];
 let addons: Addon[] = [];
-let quote: QuoteResponse | null = null;
-let loading = false;
+let quoteResult: QuoteResponse | null = null;
 let error = '';
-let dark = localStorage.getItem('dark') === 'true';
+let loading = false;
+let generatingPdf = false;
+let search = '';
 
-const state = { planId:'starter', users:3, extraStorageGB:0, addonIds: [] as string[], billingCycle:'monthly', taxRate:0.18, prorationDays:0 };
+const companyDefault: CompanySettings = {
+  name: '', rnc: '', address: '', phone: '', email: '', website: '', currency: 'USD', legalNotes: '', logoBase64: ''
+};
+
+let company: CompanySettings = readStorage('company_settings', companyDefault);
+let quotes: StoredQuote[] = readStorage<StoredQuote[]>('quotes_history', []);
+
+const pricingRequest: PricingRequest = {
+  planId: 'starter', users: 3, extraStorageGb: 0, addonIds: [], billingCycle: 'monthly', taxRate: 0.18, prorationDays: 0
+};
+const customer: CustomerInfo = { name: '', company: '', email: '', phone: '', address: '' };
+const quoteMeta: QuoteMeta = { quoteNumber: '', issueDate: todayIso(), validDays: 15, notes: '' };
+
+function readStorage<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveStorage(key: string, value: unknown) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+
+function todayIso() { return new Date().toISOString().slice(0, 10); }
+
+function nextQuoteNumber() {
+  const datePart = todayIso().replaceAll('-', '');
+  const countToday = quotes.filter(q => q.quoteMeta.quoteNumber.includes(`Q-${datePart}`)).length + 1;
+  return `Q-${datePart}-${String(countToday).padStart(4, '0')}`;
+}
 
 function setTheme() {
   document.documentElement.classList.toggle('dark', dark);
   localStorage.setItem('dark', String(dark));
 }
 
+function money(v: number, currency = company.currency) {
+  const locale = currency === 'DOP' ? 'es-DO' : 'en-US';
+  return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(v);
+}
+
 async function loadData() {
   try {
-    const [p,a] = await Promise.all([
-      fetch(`${API_BASE}/api/plans`).then(r=>r.json()),
-      fetch(`${API_BASE}/api/addons`).then(r=>r.json())
+    const [p, a] = await Promise.all([
+      fetch(`${API_BASE}/api/plans`).then(r => r.json()),
+      fetch(`${API_BASE}/api/addons`).then(r => r.json())
     ]);
     plans = p; addons = a;
-    if (plans.length) state.planId = plans[0].id;
+    if (plans.length) pricingRequest.planId = plans[0].id;
+    if (!quoteMeta.quoteNumber) quoteMeta.quoteNumber = nextQuoteNumber();
   } catch {
-    error = 'No se pudo conectar al backend.';
+    error = 'No se pudo cargar el catálogo desde backend.';
   }
 }
 
-async function cotizar() {
-  loading = true; error = ''; render();
+async function calculateQuote() {
+  loading = true;
+  error = '';
+  render();
   try {
-    const res = await fetch(`${API_BASE}/api/quote`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(state) });
+    const payload = {
+      ...pricingRequest,
+      users: Number(pricingRequest.users),
+      extraStorageGb: Number(pricingRequest.extraStorageGb),
+      taxRate: Number(pricingRequest.taxRate),
+      prorationDays: Number(pricingRequest.prorationDays)
+    };
+    const res = await fetch(`${API_BASE}/api/quote`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+    });
     if (!res.ok) throw new Error(await res.text());
-    quote = await res.json();
+    quoteResult = await res.json();
   } catch (e) {
-    error = `Error al cotizar: ${String(e)}`;
-  } finally { loading = false; render(); }
+    error = `Error al calcular: ${String(e)}`;
+  } finally {
+    loading = false;
+    render();
+  }
 }
 
-function money(v:number){ return new Intl.NumberFormat('es-ES',{style:'currency',currency:'USD'}).format(v); }
+function requiredReady() {
+  return Boolean(company.name.trim() && customer.name.trim() && quoteMeta.quoteNumber.trim());
+}
 
-function applyExample(type:'startup'|'pyme'|'scale') {
-  if (type==='startup') Object.assign(state,{planId:'starter',users:3,extraStorageGB:0,addonIds:[],billingCycle:'monthly',taxRate:0.18,prorationDays:0});
-  if (type==='pyme') Object.assign(state,{planId:'pro',users:18,extraStorageGB:200,addonIds:['support_premium'],billingCycle:'annual',taxRate:0.18,prorationDays:0});
-  if (type==='scale') Object.assign(state,{planId:'business',users:120,extraStorageGB:1000,addonIds:['backup_avanzado'],billingCycle:'annual',taxRate:0.18,prorationDays:0});
+function saveCompany() {
+  if (!company.name.trim()) {
+    error = 'El nombre comercial es requerido.';
+    render();
+    return;
+  }
+  if (company.rnc && !/^\d{9,11}$/.test(company.rnc)) {
+    error = 'El RNC debe contener de 9 a 11 dígitos.';
+    render();
+    return;
+  }
+  saveStorage('company_settings', company);
+  error = '';
   render();
 }
 
-function simulationRows() {
-  if (!quote) return '';
-  const mrr = quote.total;
-  return Array.from({length:12}).map((_,i)=>`<tr><td class='py-1'>Mes ${i+1}</td><td>${money(mrr)}</td><td>${money(mrr*12)}</td></tr>`).join('');
+function restoreCompanyExample() {
+  company = {
+    name: 'Nube Gestión SRL',
+    rnc: '132456789',
+    address: 'Av. Winston Churchill 123, Santo Domingo, RD',
+    phone: '+1 809-555-1010',
+    email: 'ventas@nubegestion.do',
+    website: 'https://nubegestion.do',
+    currency: 'DOP',
+    legalNotes: 'Cotización válida por el período indicado. Precios sujetos a cambios sin previo aviso.',
+    logoBase64: ''
+  };
+  saveCompany();
 }
 
-function render(){
-  setTheme();
-  app.innerHTML = `
-  <div class="max-w-7xl mx-auto p-4 space-y-4">
-    <header class="flex items-center justify-between card">
-      <h1 class="text-xl font-bold">SaaS Pricing Simulator</h1>
-      <button id="toggleDark" class="btn-muted">${dark?'☀️ Claro':'🌙 Oscuro'}</button>
-    </header>
+function saveQuote() {
+  if (!quoteResult || !requiredReady()) {
+    error = 'Debes calcular y completar los campos requeridos antes de guardar.';
+    render();
+    return;
+  }
 
-    <section class='card'><h2 class='font-semibold mb-2'>Ejemplos rápidos</h2>
-      <div class='flex gap-2 flex-wrap'>
-        <button class='btn-muted' id='exStartup'>Startup</button>
-        <button class='btn-muted' id='exPyme'>Pyme</button>
-        <button class='btn-muted' id='exScale'>Scale</button>
+  const item: StoredQuote = {
+    id: crypto.randomUUID(),
+    createdAt: new Date().toISOString(),
+    company: structuredClone(company),
+    customer: structuredClone(customer),
+    quoteMeta: structuredClone(quoteMeta),
+    pricingRequest: structuredClone(pricingRequest),
+    pricingResult: structuredClone(quoteResult)
+  };
+
+  quotes = [item, ...quotes];
+  saveStorage('quotes_history', quotes);
+  quoteMeta.quoteNumber = nextQuoteNumber();
+  error = '';
+  activeTab = 'history';
+  render();
+}
+
+async function downloadPdf(fromQuote?: StoredQuote) {
+  const quoteData = fromQuote ?? (quoteResult ? {
+    company,
+    customer,
+    quoteMeta,
+    pricingRequest
+  } : null);
+
+  if (!quoteData || !requiredReady()) {
+    error = 'Faltan campos requeridos para generar el PDF.';
+    render();
+    return;
+  }
+
+  generatingPdf = true;
+  error = '';
+  render();
+
+  try {
+    const payload = {
+      company: quoteData.company,
+      customer: quoteData.customer,
+      quote: {
+        quoteNumber: quoteData.quoteMeta.quoteNumber,
+        issueDate: quoteData.quoteMeta.issueDate,
+        validDays: Number(quoteData.quoteMeta.validDays),
+        notes: quoteData.quoteMeta.notes,
+        pricingRequest: quoteData.pricingRequest
+      }
+    };
+
+    const response = await fetch(`${API_BASE}/api/quotes/pdf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) throw new Error(await response.text());
+
+    const blob = await response.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `Quote_${payload.quote.quoteNumber}.pdf`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (e) {
+    error = `No se pudo descargar el PDF: ${String(e)}`;
+  } finally {
+    generatingPdf = false;
+    render();
+  }
+}
+
+function loadForDuplicate(item: StoredQuote) {
+  Object.assign(company, item.company);
+  Object.assign(customer, item.customer);
+  Object.assign(quoteMeta, item.quoteMeta);
+  Object.assign(pricingRequest, item.pricingRequest);
+  quoteResult = item.pricingResult;
+  activeTab = 'quote';
+  render();
+}
+
+function removeQuote(id: string) {
+  quotes = quotes.filter(q => q.id !== id);
+  saveStorage('quotes_history', quotes);
+  render();
+}
+
+function renderCompanyTab() {
+  return `<section class='card'>
+    <h2 class='text-lg font-semibold'>Mi Empresa</h2>
+    <div class='grid md:grid-cols-2 gap-3 mt-3'>
+      <label>Nombre comercial*<input id='company_name' class='field' value='${company.name}' /></label>
+      <label>RNC<input id='company_rnc' class='field' value='${company.rnc}' /></label>
+      <label>Dirección<input id='company_address' class='field' value='${company.address}' /></label>
+      <label>Teléfono<input id='company_phone' class='field' value='${company.phone}' /></label>
+      <label>Email<input id='company_email' class='field' value='${company.email}' /></label>
+      <label>Website<input id='company_website' class='field' value='${company.website}' /></label>
+      <label>Moneda
+        <select id='company_currency' class='field'>
+          <option value='USD' ${company.currency === 'USD' ? 'selected' : ''}>USD</option>
+          <option value='DOP' ${company.currency === 'DOP' ? 'selected' : ''}>DOP</option>
+        </select>
+      </label>
+      <label>Logo (PNG/JPG)
+        <input id='company_logo' class='field' type='file' accept='image/png,image/jpeg' />
+      </label>
+    </div>
+    ${company.logoBase64 ? `<img src='${company.logoBase64}' class='mt-3 h-16 object-contain rounded bg-slate-100 p-2' />` : ''}
+    <label class='block mt-3'>Notas legales<textarea id='company_legalNotes' class='field min-h-20'>${company.legalNotes}</textarea></label>
+    <div class='flex gap-2 mt-4'>
+      <button id='saveCompany' class='btn-primary'>Guardar cambios</button>
+      <button id='restoreCompany' class='btn-muted'>Restaurar ejemplo</button>
+      <button id='removeLogo' class='btn-muted'>Quitar logo</button>
+    </div>
+  </section>`;
+}
+
+function renderQuoteTab() {
+  return `<main class='grid lg:grid-cols-2 gap-4'>
+    <section class='card'>
+      <h2 class='font-semibold text-lg'>Cotizar</h2>
+      <h3 class='font-semibold mt-3'>Cliente</h3>
+      <div class='grid md:grid-cols-2 gap-3'>
+        <label>Nombre cliente*<input id='customer_name' class='field' value='${customer.name}' /></label>
+        <label>Empresa cliente<input id='customer_company' class='field' value='${customer.company}' /></label>
+        <label>Email<input id='customer_email' class='field' value='${customer.email}' /></label>
+        <label>Teléfono<input id='customer_phone' class='field' value='${customer.phone}' /></label>
+        <label class='md:col-span-2'>Dirección<input id='customer_address' class='field' value='${customer.address}' /></label>
+      </div>
+      <h3 class='font-semibold mt-4'>Datos de cotización</h3>
+      <div class='grid md:grid-cols-2 gap-3'>
+        <label>Fecha<input id='quote_issueDate' type='date' class='field' value='${quoteMeta.issueDate}' /></label>
+        <label>Validez (días)<input id='quote_validDays' type='number' min='1' class='field' value='${quoteMeta.validDays}' /></label>
+        <label class='md:col-span-2'>Número de cotización*<input id='quote_quoteNumber' class='field' value='${quoteMeta.quoteNumber}' /></label>
+      </div>
+      <h3 class='font-semibold mt-4'>Pricing</h3>
+      <label>Plan<select id='planId' class='field'>${plans.map(p => `<option value='${p.id}' ${pricingRequest.planId === p.id ? 'selected' : ''}>${p.nombre}</option>`)}</select></label>
+      <div class='grid md:grid-cols-2 gap-3'>
+        <label>Usuarios<input id='users' type='number' min='1' class='field' value='${pricingRequest.users}'></label>
+        <label>Storage extra GB<input id='extraStorageGb' type='number' min='0' class='field' value='${pricingRequest.extraStorageGb}'></label>
+        <label>Add-ons<select id='addonIds' class='field' multiple>${addons.map(a => `<option value='${a.id}' ${pricingRequest.addonIds.includes(a.id) ? 'selected' : ''}>${a.nombre}</option>`)}</select></label>
+        <label>Ciclo<select id='billingCycle' class='field'><option value='monthly' ${pricingRequest.billingCycle === 'monthly' ? 'selected' : ''}>Mensual</option><option value='annual' ${pricingRequest.billingCycle === 'annual' ? 'selected' : ''}>Anual</option></select></label>
+        <label>Impuesto<input id='taxRate' step='0.01' type='number' min='0' max='0.25' class='field' value='${pricingRequest.taxRate}'></label>
+        <label>Prorrateo días<input id='prorationDays' type='number' min='0' max='30' class='field' value='${pricingRequest.prorationDays}'></label>
+      </div>
+      <label class='block mt-3'>Notas para cliente<textarea id='quote_notes' class='field min-h-20'>${quoteMeta.notes}</textarea></label>
+      <div class='grid md:grid-cols-3 gap-2 mt-4'>
+        <button id='calculate' class='btn-primary'>${loading ? 'Calculando...' : 'Calcular'}</button>
+        <button id='saveQuote' class='btn-muted'>Guardar cotización</button>
+        <button id='downloadPdf' class='btn-muted' ${!requiredReady() ? 'disabled' : ''}>${generatingPdf ? 'Generando PDF...' : 'Descargar PDF'}</button>
       </div>
     </section>
+    <section class='card'>
+      <h2 class='font-semibold text-lg'>Breakdown</h2>
+      ${!quoteResult ? `<p class='text-slate-500 mt-2'>Calcula para ver resultados.</p>` : `
+      <div class='mt-3 space-y-1'>${quoteResult.items.map(i => `<div class='flex justify-between'><span>${i.label}</span><span>${money(i.amount)}</span></div>`).join('')}</div>
+      <div class='mt-3 space-y-1 text-emerald-600'>${quoteResult.discounts.map(i => `<div class='flex justify-between'><span>${i.label}</span><span>${money(i.amount)}</span></div>`).join('')}</div>
+      <hr class='my-3 border-slate-300 dark:border-slate-700' />
+      <div class='space-y-1'>
+        <div class='flex justify-between'><span>Subtotal</span><span>${money(quoteResult.subtotal)}</span></div>
+        <div class='flex justify-between'><span>Impuestos</span><span>${money(quoteResult.tax)}</span></div>
+        <div class='flex justify-between font-bold text-xl'><span>Total</span><span>${money(quoteResult.total)}</span></div>
+      </div>`}
+    </section>
+  </main>`;
+}
 
-    <main class="grid lg:grid-cols-2 gap-4">
-      <section class="card">
-        <h2 class="font-semibold text-lg">Formulario de cotización</h2>
-        <label class='block mt-3'>Plan<select id='planId' class='field'>${plans.map(p=>`<option value='${p.id}' ${state.planId===p.id?'selected':''}>${p.nombre}</option>`)}</select></label>
-        <label class='block mt-3'>Usuarios<input id='users' type='number' class='field' min='1' value='${state.users}'></label>
-        <label class='block mt-3'>Storage extra (GB)<input id='extraStorageGB' type='number' class='field' min='0' value='${state.extraStorageGB}'></label>
-        <label class='block mt-3'>Add-ons<select id='addonIds' class='field' multiple>${addons.map(a=>`<option value='${a.id}' ${state.addonIds.includes(a.id)?'selected':''}>${a.nombre}</option>`)}</select></label>
-        <label class='block mt-3'>Ciclo<select id='billingCycle' class='field'><option value='monthly' ${state.billingCycle==='monthly'?'selected':''}>Mensual</option><option value='annual' ${state.billingCycle==='annual'?'selected':''}>Anual</option></select></label>
-        <label class='block mt-3'>Impuesto (0-0.25)<input id='taxRate' step='0.01' type='number' class='field' value='${state.taxRate}'></label>
-        <label class='block mt-3'>Prorrateo días (0-30)<input id='prorationDays' type='number' class='field' value='${state.prorationDays}'></label>
-        <button id='cotizar' class='btn-primary mt-4 w-full'>${loading?'Calculando...':'Calcular cotización'}</button>
-      </section>
-
-      <section class="card">
-        <h2 class="font-semibold text-lg">Resultado</h2>
-        ${error ? `<p class='text-red-500 mt-2'>${error}</p>` : ''}
-        ${!quote ? `<p class='text-slate-500 mt-3'>Sin resultados aún.</p>` : `
-        <div class='mt-3 p-4 rounded-xl bg-indigo-50 dark:bg-indigo-950'><p class='text-sm'>Total</p><p class='text-3xl font-bold'>${money(quote.total)}</p></div>
-        <div class='mt-3 space-y-1'>${quote.items.map(i=>`<div class='flex justify-between'><span>${i.label}</span><span>${money(i.amount)}</span></div>`).join('')}</div>
-        <div class='mt-3 space-y-1 text-emerald-600'>${quote.discounts.map(i=>`<div class='flex justify-between'><span>${i.label}</span><span>${money(i.amount)}</span></div>`).join('')}</div>
-        <hr class='my-3 border-slate-300 dark:border-slate-700' />
-        <div class='space-y-1'>
-          <div class='flex justify-between'><span>Subtotal</span><span>${money(quote.subtotal)}</span></div>
-          <div class='flex justify-between'><span>Impuestos</span><span>${money(quote.tax)}</span></div>
-          <div class='flex justify-between font-bold'><span>Total</span><span>${money(quote.total)}</span></div>
+function renderHistoryTab() {
+  const filtered = quotes.filter(q => (`${q.customer.name} ${q.quoteMeta.quoteNumber}`).toLowerCase().includes(search.toLowerCase()));
+  return `<section class='card'>
+    <h2 class='font-semibold text-lg'>Cotizaciones</h2>
+    <input id='search' placeholder='Buscar por cliente o número...' class='field mt-3' value='${search}' />
+    <div class='mt-3 space-y-2'>
+      ${filtered.length === 0 ? `<p class='text-slate-500'>No hay cotizaciones.</p>` : filtered.map(q => `<div class='rounded-xl border border-slate-200 dark:border-slate-700 p-3'>
+        <div class='flex flex-wrap items-center justify-between gap-2'>
+          <div>
+            <p class='font-semibold'>${q.quoteMeta.quoteNumber}</p>
+            <p class='text-sm text-slate-500'>${q.customer.name} · ${q.customer.company || 'Sin empresa'} · ${money(q.pricingResult.total, q.company.currency)}</p>
+          </div>
+          <div class='flex gap-2 flex-wrap'>
+            <button class='btn-muted' data-action='view' data-id='${q.id}'>Ver detalle</button>
+            <button class='btn-muted' data-action='pdf' data-id='${q.id}'>Descargar PDF</button>
+            <button class='btn-muted' data-action='dup' data-id='${q.id}'>Duplicar</button>
+            <button class='btn-muted' data-action='del' data-id='${q.id}'>Eliminar</button>
+          </div>
         </div>
-        <div class='flex gap-2 mt-4'><button id='copyJson' class='btn-muted'>Copiar JSON</button><button id='downloadJson' class='btn-muted'>Descargar .json</button></div>
-        <h3 class='font-semibold mt-5'>Simulación 12 meses</h3>
-        <table class='w-full text-sm mt-2'><thead><tr><th class='text-left'>Mes</th><th class='text-left'>MRR</th><th class='text-left'>ARR</th></tr></thead><tbody>${simulationRows()}</tbody></table>
-        `}
-      </section>
-    </main>
+        <details class='mt-2'><summary class='cursor-pointer text-sm'>Detalle rápido</summary>
+          <pre class='text-xs mt-2 overflow-auto bg-slate-100 dark:bg-slate-800 p-2 rounded'>${JSON.stringify(q, null, 2)}</pre>
+        </details>
+      </div>`).join('')}
+    </div>
+  </section>`;
+}
+
+function render() {
+  setTheme();
+  app.innerHTML = `<div class='max-w-7xl mx-auto p-4 space-y-4'>
+    <header class='card flex flex-wrap items-center justify-between gap-2'>
+      <h1 class='text-xl font-bold'>SaaS Pricing Simulator</h1>
+      <div class='flex gap-2'>
+        <button class='btn-muted tab-btn ${activeTab === 'quote' ? 'ring-2 ring-indigo-500' : ''}' data-tab='quote'>Cotizar</button>
+        <button class='btn-muted tab-btn ${activeTab === 'company' ? 'ring-2 ring-indigo-500' : ''}' data-tab='company'>Mi Empresa</button>
+        <button class='btn-muted tab-btn ${activeTab === 'history' ? 'ring-2 ring-indigo-500' : ''}' data-tab='history'>Cotizaciones</button>
+        <button id='toggleDark' class='btn-muted'>${dark ? '☀️ Claro' : '🌙 Oscuro'}</button>
+      </div>
+    </header>
+    ${error ? `<p class='card text-red-500'>${error}</p>` : ''}
+    ${activeTab === 'quote' ? renderQuoteTab() : activeTab === 'company' ? renderCompanyTab() : renderHistoryTab()}
   </div>`;
 
-  document.getElementById('toggleDark')?.addEventListener('click', ()=>{dark=!dark; render();});
-  document.getElementById('exStartup')?.addEventListener('click', ()=>applyExample('startup'));
-  document.getElementById('exPyme')?.addEventListener('click', ()=>applyExample('pyme'));
-  document.getElementById('exScale')?.addEventListener('click', ()=>applyExample('scale'));
+  document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => { activeTab = (btn as HTMLButtonElement).dataset.tab as Tab; render(); }));
+  document.getElementById('toggleDark')?.addEventListener('click', () => { dark = !dark; render(); });
 
-  const bindNum = (id:keyof typeof state) => (document.getElementById(id as string) as HTMLInputElement | null)?.addEventListener('input',(e)=>{(state as any)[id] = Number((e.target as HTMLInputElement).value);});
-  (document.getElementById('planId') as HTMLSelectElement | null)?.addEventListener('change',e=>state.planId=(e.target as HTMLSelectElement).value);
-  (document.getElementById('billingCycle') as HTMLSelectElement | null)?.addEventListener('change',e=>state.billingCycle=(e.target as HTMLSelectElement).value);
-  (document.getElementById('addonIds') as HTMLSelectElement | null)?.addEventListener('change',e=>state.addonIds = Array.from((e.target as HTMLSelectElement).selectedOptions).map(o=>o.value));
-  bindNum('users'); bindNum('extraStorageGB'); bindNum('taxRate'); bindNum('prorationDays');
-  document.getElementById('cotizar')?.addEventListener('click', cotizar);
-  document.getElementById('copyJson')?.addEventListener('click',()=>quote && navigator.clipboard.writeText(JSON.stringify(quote,null,2)));
-  document.getElementById('downloadJson')?.addEventListener('click',()=>{
-    if (!quote) return;
-    const blob = new Blob([JSON.stringify(quote,null,2)],{type:'application/json'});
-    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='cotizacion.json'; a.click();
+  bindCommonEvents();
+}
+
+function bindCommonEvents() {
+  const bindInput = <T extends object>(id: string, obj: T, key: keyof T) => {
+    document.getElementById(id)?.addEventListener('input', (e) => { (obj[key] as any) = (e.target as HTMLInputElement).value; });
+  };
+
+  if (activeTab === 'company') {
+    bindInput('company_name', company, 'name');
+    bindInput('company_rnc', company, 'rnc');
+    bindInput('company_address', company, 'address');
+    bindInput('company_phone', company, 'phone');
+    bindInput('company_email', company, 'email');
+    bindInput('company_website', company, 'website');
+    bindInput('company_legalNotes', company, 'legalNotes');
+    document.getElementById('company_currency')?.addEventListener('change', e => { company.currency = (e.target as HTMLSelectElement).value as 'USD' | 'DOP'; });
+    document.getElementById('company_logo')?.addEventListener('change', async e => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      if (!['image/png', 'image/jpeg'].includes(file.type)) { error = 'Solo se permiten logos PNG/JPG.'; render(); return; }
+      company.logoBase64 = await fileToBase64(file);
+      render();
+    });
+    document.getElementById('saveCompany')?.addEventListener('click', saveCompany);
+    document.getElementById('restoreCompany')?.addEventListener('click', restoreCompanyExample);
+    document.getElementById('removeLogo')?.addEventListener('click', () => { company.logoBase64 = ''; render(); });
+  }
+
+  if (activeTab === 'quote') {
+    bindInput('customer_name', customer, 'name');
+    bindInput('customer_company', customer, 'company');
+    bindInput('customer_email', customer, 'email');
+    bindInput('customer_phone', customer, 'phone');
+    bindInput('customer_address', customer, 'address');
+    bindInput('quote_issueDate', quoteMeta, 'issueDate');
+    bindInput('quote_quoteNumber', quoteMeta, 'quoteNumber');
+    bindInput('quote_notes', quoteMeta, 'notes');
+
+    document.getElementById('quote_validDays')?.addEventListener('input', e => quoteMeta.validDays = Number((e.target as HTMLInputElement).value));
+    document.getElementById('planId')?.addEventListener('change', e => pricingRequest.planId = (e.target as HTMLSelectElement).value);
+    document.getElementById('billingCycle')?.addEventListener('change', e => pricingRequest.billingCycle = (e.target as HTMLSelectElement).value as 'monthly' | 'annual');
+    document.getElementById('addonIds')?.addEventListener('change', e => pricingRequest.addonIds = Array.from((e.target as HTMLSelectElement).selectedOptions).map(o => o.value));
+    document.getElementById('users')?.addEventListener('input', e => pricingRequest.users = Number((e.target as HTMLInputElement).value));
+    document.getElementById('extraStorageGb')?.addEventListener('input', e => pricingRequest.extraStorageGb = Number((e.target as HTMLInputElement).value));
+    document.getElementById('taxRate')?.addEventListener('input', e => pricingRequest.taxRate = Number((e.target as HTMLInputElement).value));
+    document.getElementById('prorationDays')?.addEventListener('input', e => pricingRequest.prorationDays = Number((e.target as HTMLInputElement).value));
+
+    document.getElementById('calculate')?.addEventListener('click', calculateQuote);
+    document.getElementById('saveQuote')?.addEventListener('click', saveQuote);
+    document.getElementById('downloadPdf')?.addEventListener('click', () => downloadPdf());
+  }
+
+  if (activeTab === 'history') {
+    document.getElementById('search')?.addEventListener('input', e => { search = (e.target as HTMLInputElement).value; render(); });
+    document.querySelectorAll('[data-action]').forEach(el => el.addEventListener('click', () => {
+      const id = (el as HTMLButtonElement).dataset.id!;
+      const action = (el as HTMLButtonElement).dataset.action;
+      const item = quotes.find(q => q.id === id);
+      if (!item) return;
+      if (action === 'view') alert(JSON.stringify(item, null, 2));
+      if (action === 'pdf') downloadPdf(item);
+      if (action === 'dup') loadForDuplicate(item);
+      if (action === 'del') removeQuote(id);
+    }));
+  }
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
   });
 }
 
