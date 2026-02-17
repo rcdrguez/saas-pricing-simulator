@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.vscode/
+*.user
+*.suo
+bin/
+obj/
+TestResults/
+.env
