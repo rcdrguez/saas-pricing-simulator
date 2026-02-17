@@ -1,55 +1,74 @@
 # SaaS Pricing Simulator
 
-Simulador full-stack para generar cotizaciones SaaS con desglose tipo factura: plan, usuarios extra, almacenamiento, add-ons, descuentos, impuestos y prorrateo.
+Simulador full-stack para cotizaciones SaaS con motor de pricing en backend y generación de PDF profesional bajo demanda.
 
-## Features
+## Novedades (MVP)
 
-- Backend .NET 8 (ASP.NET Core Web API) con Swagger.
-- Frontend Vite + TypeScript + Tailwind (sin React).
-- UI responsive con modo claro/oscuro.
-- Ejemplos rápidos (Startup, Pyme, Scale).
-- Cotización con breakdown completo y exportación JSON.
-- Simulación de 12 meses (MRR/ARR).
-- Pricing versionado en JSON (`src/backend/src/Infrastructure/data/pricing.json`).
-- Tests xUnit para reglas de cálculo principales.
+- Nueva navegación por tabs: **Cotizar**, **Mi Empresa**, **Cotizaciones**.
+- Configuración de empresa persistida en `LocalStorage` (incluye logo base64).
+- Gestión de cotizaciones guardadas en `LocalStorage`.
+- Descarga de cotización en PDF vía backend (`POST /api/quotes/pdf`) usando QuestPDF.
+- Se mantiene la lógica de pricing en backend (`POST /api/quote`) y se reutiliza al generar PDF.
 
-## Arquitectura
+## Stack
 
-```text
-src/
-  backend/
-    src/
-      Domain/          -> Entidades de pricing
-      Application/     -> DTOs, interfaces, lógica de cálculo
-      Infrastructure/  -> Carga de pricing.json
-      Api/             -> Endpoints REST, middleware de errores
-    tests/
-      QuoteCalculator.Tests/
-  frontend/
-    src/               -> SPA TypeScript + Tailwind
-```
+- **Backend**: .NET 8 ASP.NET Core Web API + Swagger + QuestPDF.
+- **Frontend**: Vite + TypeScript + TailwindCSS (sin React).
 
-## Requisitos
+## Pantallas
 
-- .NET SDK 8
-- Node.js 20+
+## 1) Cotizar
+
+Incluye:
+- Formulario de pricing: plan, usuarios, storage extra, add-ons, ciclo, impuesto y prorrateo.
+- Sección de cliente: nombre (requerido), empresa, email, teléfono, dirección.
+- Datos de cotización: fecha, validez, número autogenerado `Q-YYYYMMDD-0001`.
+- Notas para el cliente.
+
+Acciones:
+- **Calcular**: obtiene breakdown desde backend.
+- **Guardar cotización**: persiste en `LocalStorage`.
+- **Descargar PDF**: envía payload al backend y descarga archivo `Quote_<quoteNumber>.pdf`.
+
+## 2) Mi Empresa
+
+Campos:
+- Nombre comercial (requerido)
+- RNC (opcional, 9-11 dígitos si se completa)
+- Dirección, teléfono, email, website
+- Moneda (USD/DOP)
+- Notas legales
+- Logo PNG/JPG (preview + quitar)
+
+Acciones:
+- **Guardar cambios**
+- **Restaurar ejemplo**
+
+## 3) Cotizaciones
+
+- Lista histórica desde `LocalStorage`
+- Búsqueda por cliente o número
+- Acciones por registro:
+  - Ver detalle
+  - Descargar PDF (re-generación)
+  - Duplicar (carga datos en Cotizar)
+  - Eliminar
 
 ## Ejecución local
 
-### 1) Backend
+### Backend
 
 ```bash
 cd src/backend
- dotnet run --project src/Api/Api.csproj --urls http://localhost:5070
+dotnet run --project src/Api/Api.csproj --urls http://localhost:5070
 ```
 
 Swagger: `http://localhost:5070/swagger`
 
-### 2) Frontend
+### Frontend
 
 ```bash
 cd src/frontend
-cp .env.example .env
 npm install
 npm run dev
 ```
@@ -65,61 +84,79 @@ Retorna planes disponibles.
 Retorna add-ons disponibles.
 
 ### POST `/api/quote`
+Calcula breakdown de pricing.
 
-Request:
+### POST `/api/quotes/pdf`
+Genera PDF de cotización.
 
-```json
-{
-  "planId": "pro",
-  "users": 18,
-  "extraStorageGb": 200,
-  "addonIds": ["support_premium"],
-  "billingCycle": "annual",
-  "taxRate": 0.18,
-  "prorationDays": 0
-}
-```
-
-Response (ejemplo):
+Request de ejemplo:
 
 ```json
 {
-  "currency": "USD",
-  "billingCycle": "annual",
-  "subtotal": 266,
-  "discountTotal": -38.57,
-  "subtotalAfterDiscounts": 227.43,
-  "tax": 40.94,
-  "total": 268.37
+  "company": {
+    "name": "Mi Empresa SRL",
+    "rnc": "123456789",
+    "address": "Santo Domingo...",
+    "phone": "+1 ...",
+    "email": "info@empresa.do",
+    "website": "https://empresa.do",
+    "currency": "USD",
+    "legalNotes": "Condiciones...",
+    "logoBase64": "data:image/png;base64,iVBORw0KGgo..."
+  },
+  "customer": {
+    "name": "Ricardo Rodríguez",
+    "company": "Cliente SRL",
+    "email": "cliente@correo.com",
+    "phone": "809-000-0000",
+    "address": "Santo Domingo"
+  },
+  "quote": {
+    "quoteNumber": "Q-20260217-0001",
+    "issueDate": "2026-02-17",
+    "validDays": 15,
+    "notes": "Notas para el cliente",
+    "pricingRequest": {
+      "planId": "pro",
+      "users": 18,
+      "extraStorageGb": 200,
+      "addonIds": ["support_premium"],
+      "billingCycle": "annual",
+      "taxRate": 0.18,
+      "prorationDays": 0
+    }
+  }
 }
 ```
 
-## Reglas de pricing implementadas
+Response:
+- `200 OK`
+- `Content-Type: application/pdf`
+- Archivo: `Quote_<quoteNumber>.pdf`
 
-- Descuento anual: 10% (antes de impuestos).
-- Descuento por volumen:
-  - 25-49: 5%
-  - 50-99: 10%
-  - 100+: 15%
-- Impuesto `taxRate` entre 0 y 0.25.
-- Prorrateo opcional: `subtotal / 30 * prorationDays`.
-- Storage extra: bloques de 100 GB (`Math.Ceiling`).
+## Cómo funciona el logo (base64)
+
+1. El usuario sube un PNG/JPG en **Mi Empresa**.
+2. El frontend lo convierte a Data URL base64 (`FileReader.readAsDataURL`).
+3. Se guarda en `LocalStorage` dentro de `company_settings.logoBase64`.
+4. Al generar PDF, se envía al backend en `company.logoBase64`.
+5. El backend intenta decodificarlo; si falla o no existe, genera el PDF sin logo.
+
+## Validaciones principales
+
+- `users >= 1`
+- `taxRate` entre `0` y `0.25`
+- `prorationDays` entre `0` y `30`
+- `company.name` requerido
+- `customer.name` requerido
+- `quoteNumber` requerido
+
+## Tests
+
+Proyecto con pruebas xUnit para el cálculo del motor de pricing (`src/backend/tests/QuoteCalculator.Tests`).
 
 ## Docker Compose (opcional)
 
 ```bash
 docker compose up --build
 ```
-
-## Screenshots (placeholders)
-
-- `docs/screenshots/dashboard-light.png`
-- `docs/screenshots/dashboard-dark.png`
-- `docs/screenshots/quote-example.png`
-
-## Roadmap
-
-- Persistir escenarios de cotización.
-- Exportar cotización a PDF.
-- Internacionalización de moneda.
-- Hot reload real de `pricing.json` con `IOptionsMonitor`.
