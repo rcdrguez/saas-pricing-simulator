@@ -66,7 +66,9 @@ let error = '';
 let loading = false;
 let savingCatalog = false;
 let generatingPdf = false;
+let generatingInsight = false;
 let search = '';
+let aiInsight = '';
 
 const companyDefault: CompanySettings = {
   name: '', rnc: '', address: '', phone: '', email: '', website: '', currency: 'USD', legalNotes: '', logoBase64: ''
@@ -142,12 +144,51 @@ async function calculateQuote() {
     });
     if (!res.ok) throw new Error(await res.text());
     quoteResult = await res.json();
+    aiInsight = '';
   } catch (e) {
     error = `Error al calcular: ${String(e)}`;
   } finally {
     loading = false;
     render();
   }
+}
+
+function buildAiInsight() {
+  if (!quoteResult) {
+    error = 'Primero debes calcular la cotización para generar el texto IA.';
+    render();
+    return;
+  }
+
+  generatingInsight = true;
+  render();
+
+  const selectedPlan = plans.find(p => p.id === pricingRequest.planId);
+  const monthlyTotal = pricingRequest.billingCycle === 'annual' ? quoteResult.total / 12 : quoteResult.total;
+  const topItem = [...quoteResult.items].sort((a, b) => b.amount - a.amount)[0];
+  const hasDiscount = quoteResult.discounts.length > 0;
+  const hasAddons = pricingRequest.addonIds.length > 0;
+  const hasProration = pricingRequest.prorationDays > 0;
+  const customerName = customer.name.trim() || 'tu cliente';
+
+  const narrative = [
+    `Analizando esta cotización para ${customerName}, la recomendación es iniciar con el plan ${selectedPlan?.nombre ?? 'seleccionado'} con ${pricingRequest.users} usuario(s) y un total de ${money(quoteResult.total)} ${pricingRequest.billingCycle === 'annual' ? 'anuales' : 'mensuales'}.`,
+    `El rubro con mayor impacto es "${topItem?.label ?? 'base del plan'}" por ${money(topItem?.amount ?? 0)}.`,
+    hasAddons
+      ? `Se incluyeron ${pricingRequest.addonIds.length} add-on(s), lo que agrega valor funcional desde el inicio.`
+      : 'No se incluyeron add-ons, lo que mantiene una propuesta más simple y económica.',
+    hasDiscount
+      ? `Se aplicaron descuentos por ${money(quoteResult.discounts.reduce((acc, d) => acc + d.amount, 0))}, mejorando el retorno de inversión esperado.`
+      : 'No hay descuentos aplicados en este escenario, por lo que el total refleja precio de lista.',
+    hasProration
+      ? `El prorrateo de ${pricingRequest.prorationDays} día(s) ajusta el primer cobro para una entrada gradual.`
+      : 'No se aplicó prorrateo, así que el cobro inicia con ciclo completo.',
+    `Referencia rápida: ${money(monthlyTotal)} equivalente mensual estimado y ${money(quoteResult.subtotal)} de subtotal antes de impuestos.`
+  ];
+
+  aiInsight = narrative.join(' ');
+  generatingInsight = false;
+  render();
 }
 
 function requiredReady() {
@@ -592,6 +633,13 @@ function renderQuoteTab() {
         <div class='flex justify-between'><span>Impuestos</span><span>${money(quoteResult.tax)}</span></div>
         <div class='flex justify-between font-bold text-xl'><span>Total</span><span>${money(quoteResult.total)}</span></div>
       </div>`}
+      <div class='mt-4'>
+        <button id='generateInsight' class='btn-muted w-full' ${generatingInsight || !quoteResult ? 'disabled' : ''}>${generatingInsight ? 'Generando análisis...' : 'Generar texto IA descriptivo (sin API)'}</button>
+        ${aiInsight ? `<article class='mt-3 rounded-lg border border-indigo-200 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 p-3'>
+          <h3 class='font-semibold text-sm'>Asistente IA local</h3>
+          <p class='mt-1 text-sm leading-relaxed'>${aiInsight}</p>
+        </article>` : `<p class='mt-2 text-xs text-slate-500'>Tip: genera un resumen comercial automático usando solo los datos de esta cotización.</p>`}
+      </div>
     </section>
   </main>`;
 }
@@ -698,6 +746,7 @@ function bindCommonEvents() {
     document.getElementById('prorationDays')?.addEventListener('input', e => pricingRequest.prorationDays = Number((e.target as HTMLInputElement).value));
 
     document.getElementById('calculate')?.addEventListener('click', calculateQuote);
+    document.getElementById('generateInsight')?.addEventListener('click', buildAiInsight);
     document.getElementById('saveQuote')?.addEventListener('click', saveQuote);
     document.getElementById('downloadPdf')?.addEventListener('click', () => downloadPdf());
   }
