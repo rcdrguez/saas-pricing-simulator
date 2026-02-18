@@ -6,7 +6,8 @@
       "nombre": "Starter",
       "precioBaseMensual": 19,
       "usuariosIncluidos": 3,
-      "storageIncluidoGb": 50
+      "storageIncluidoGb": 50,
+      "costoPorUsuarioMensual": null
     },
     {
       "id": "pro",
@@ -15,21 +16,15 @@
       "usuariosIncluidos": 10,
       "storageIncluidoGb": 200,
       "costoPorUsuarioMensual": 6
-    },
-    {
-      "id": "business",
-      "nombre": "Business",
-      "precioBaseMensual": 129,
-      "usuariosIncluidos": 25,
-      "storageIncluidoGb": 1000,
-      "costoPorUsuarioMensual": 5
     }
   ],
   "addons": [
-    { "id": "support_premium", "nombre": "Soporte premium", "tipo": "flat", "precio": 149 },
-    { "id": "backup_avanzado", "nombre": "Backup avanzado", "tipo": "flat", "precio": 39 },
-    { "id": "audit_logs", "nombre": "Audit logs", "tipo": "flat", "precio": 59 },
-    { "id": "api_calls_pack", "nombre": "Pack API calls", "tipo": "per_unit", "precio": 1.2 }
+    {
+      "id": "support_premium",
+      "nombre": "Soporte premium",
+      "tipo": "flat",
+      "precio": 149
+    }
   ],
   "reglas": {
     "costoPorUsuarioMensual": 8,
