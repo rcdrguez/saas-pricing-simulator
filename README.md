@@ -9,6 +9,7 @@ Simulador full-stack para cotizaciones SaaS con motor de pricing en backend y ge
 - Gestión de cotizaciones guardadas en `LocalStorage`.
 - Descarga de cotización en PDF vía backend (`POST /api/quotes/pdf`) usando QuestPDF.
 - Se mantiene la lógica de pricing en backend (`POST /api/quote`) y se reutiliza al generar PDF.
+- Nuevo **Online AI BYOK**: el frontend usa `/api/generate` para crear texto de cotización con OpenAI/Gemini y fallback automático a modo mock.
 
 ## Stack
 
@@ -97,6 +98,38 @@ Actualiza y persiste el catálogo completo en archivo JSON.
 
 ### POST `/api/quote`
 Calcula breakdown de pricing.
+
+### POST `/api/generate`
+Genera texto comercial para una cotización.
+
+- El frontend **siempre** llama este endpoint.
+- `onlineMode=true` + `apiKey` + `provider` (`openai`/`gemini`) intenta llamada real al proveedor.
+- Si no hay token o falla el proveedor, responde en `mock` para que la demo continúe.
+- El token se usa solo para esa petición y no se persiste en servidor.
+
+Request de ejemplo:
+
+```json
+{
+  "onlineMode": true,
+  "provider": "openai",
+  "apiKey": "sk-demo...",
+  "quote": {
+    "customerName": "Ricardo Rodríguez",
+    "planName": "Pro",
+    "users": 18,
+    "addons": ["Soporte premium"],
+    "billingCycle": "annual",
+    "subtotal": 1200,
+    "tax": 216,
+    "total": 1416,
+    "currency": "USD",
+    "topItemLabel": "Base plan Pro",
+    "hasDiscounts": true,
+    "hasProration": false
+  }
+}
+```
 
 ### POST `/api/quotes/pdf`
 Genera PDF de cotización.

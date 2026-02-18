@@ -30,6 +30,38 @@ type QuoteResponse = {
   tax: number;
   total: number;
 };
+type AiProvider = 'openai' | 'gemini';
+type AiOnlineSettings = {
+  enabled: boolean;
+  provider: AiProvider;
+  token: string;
+  rememberToken: boolean;
+};
+type GenerateInsightRequest = {
+  onlineMode: boolean;
+  provider: AiProvider;
+  apiKey?: string;
+  quote: {
+    customerName: string;
+    planName: string;
+    users: number;
+    addons: string[];
+    billingCycle: 'monthly' | 'annual';
+    subtotal: number;
+    tax: number;
+    total: number;
+    currency: string;
+    topItemLabel: string;
+    hasDiscounts: boolean;
+    hasProration: boolean;
+  };
+};
+type GenerateInsightResponse = {
+  text: string;
+  modeUsed: 'online' | 'mock';
+  providerUsed: 'openai' | 'gemini' | 'mock';
+  warning?: string;
+};
 type CompanySettings = {
   name: string;
   rnc: string;
@@ -69,6 +101,16 @@ let generatingPdf = false;
 let generatingInsight = false;
 let search = '';
 let aiInsight = '';
+let aiInsightMeta = '';
+
+const rememberTokenDefault = localStorage.getItem('ai_online_remember_token') === 'true';
+const tokenFromStorage = rememberTokenDefault ? (localStorage.getItem('ai_online_token') ?? '') : '';
+const aiOnlineSettings: AiOnlineSettings = {
+  enabled: false,
+  provider: 'openai',
+  token: tokenFromStorage,
+  rememberToken: rememberTokenDefault
+};
 
 const companyDefault: CompanySettings = {
   name: '', rnc: '', address: '', phone: '', email: '', website: '', currency: 'USD', legalNotes: '', logoBase64: ''
@@ -114,6 +156,15 @@ function money(v: number, currency = company.currency) {
   return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(v);
 }
 
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 async function loadData() {
   try {
     const catalog: PricingCatalog = await fetch(`${API_BASE}/api/pricing`).then(r => r.json());
@@ -145,6 +196,7 @@ async function calculateQuote() {
     if (!res.ok) throw new Error(await res.text());
     quoteResult = await res.json();
     aiInsight = '';
+    aiInsightMeta = '';
   } catch (e) {
     error = `Error al calcular: ${String(e)}`;
   } finally {
@@ -153,7 +205,23 @@ async function calculateQuote() {
   }
 }
 
-function buildAiInsight() {
+function persistTokenPreference() {
+  localStorage.setItem('ai_online_remember_token', String(aiOnlineSettings.rememberToken));
+  if (aiOnlineSettings.rememberToken && aiOnlineSettings.token.trim()) {
+    localStorage.setItem('ai_online_token', aiOnlineSettings.token.trim());
+    return;
+  }
+  localStorage.removeItem('ai_online_token');
+}
+
+function clearAiToken() {
+  aiOnlineSettings.token = '';
+  localStorage.removeItem('ai_online_token');
+  error = '';
+  render();
+}
+
+async function buildAiInsight() {
   if (!quoteResult) {
     error = 'Primero debes calcular la cotización para generar el texto IA.';
     render();
@@ -161,34 +229,56 @@ function buildAiInsight() {
   }
 
   generatingInsight = true;
+  error = '';
+  aiInsightMeta = '';
   render();
 
-  const selectedPlan = plans.find(p => p.id === pricingRequest.planId);
-  const monthlyTotal = pricingRequest.billingCycle === 'annual' ? quoteResult.total / 12 : quoteResult.total;
-  const topItem = [...quoteResult.items].sort((a, b) => b.amount - a.amount)[0];
-  const hasDiscount = quoteResult.discounts.length > 0;
-  const hasAddons = pricingRequest.addonIds.length > 0;
-  const hasProration = pricingRequest.prorationDays > 0;
-  const customerName = customer.name.trim() || 'tu cliente';
+  try {
+    const selectedPlan = plans.find(p => p.id === pricingRequest.planId);
+    const topItem = [...quoteResult.items].sort((a, b) => b.amount - a.amount)[0];
+    const selectedAddons = addons.filter(a => pricingRequest.addonIds.includes(a.id)).map(a => a.nombre);
+    const payload: GenerateInsightRequest = {
+      onlineMode: aiOnlineSettings.enabled,
+      provider: aiOnlineSettings.provider,
+      apiKey: aiOnlineSettings.enabled && aiOnlineSettings.token.trim() ? aiOnlineSettings.token.trim() : undefined,
+      quote: {
+        customerName: customer.name.trim() || 'tu cliente',
+        planName: selectedPlan?.nombre ?? pricingRequest.planId,
+        users: pricingRequest.users,
+        addons: selectedAddons,
+        billingCycle: pricingRequest.billingCycle,
+        subtotal: quoteResult.subtotal,
+        tax: quoteResult.tax,
+        total: quoteResult.total,
+        currency: quoteResult.currency,
+        topItemLabel: topItem?.label ?? 'base del plan',
+        hasDiscounts: quoteResult.discounts.length > 0,
+        hasProration: pricingRequest.prorationDays > 0
+      }
+    };
 
-  const narrative = [
-    `Analizando esta cotización para ${customerName}, la recomendación es iniciar con el plan ${selectedPlan?.nombre ?? 'seleccionado'} con ${pricingRequest.users} usuario(s) y un total de ${money(quoteResult.total)} ${pricingRequest.billingCycle === 'annual' ? 'anuales' : 'mensuales'}.`,
-    `El rubro con mayor impacto es "${topItem?.label ?? 'base del plan'}" por ${money(topItem?.amount ?? 0)}.`,
-    hasAddons
-      ? `Se incluyeron ${pricingRequest.addonIds.length} add-on(s), lo que agrega valor funcional desde el inicio.`
-      : 'No se incluyeron add-ons, lo que mantiene una propuesta más simple y económica.',
-    hasDiscount
-      ? `Se aplicaron descuentos por ${money(quoteResult.discounts.reduce((acc, d) => acc + d.amount, 0))}, mejorando el retorno de inversión esperado.`
-      : 'No hay descuentos aplicados en este escenario, por lo que el total refleja precio de lista.',
-    hasProration
-      ? `El prorrateo de ${pricingRequest.prorationDays} día(s) ajusta el primer cobro para una entrada gradual.`
-      : 'No se aplicó prorrateo, así que el cobro inicia con ciclo completo.',
-    `Referencia rápida: ${money(monthlyTotal)} equivalente mensual estimado y ${money(quoteResult.subtotal)} de subtotal antes de impuestos.`
-  ];
+    const res = await fetch(`${API_BASE}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error(await res.text());
 
-  aiInsight = narrative.join(' ');
-  generatingInsight = false;
-  render();
+    const data = await res.json() as GenerateInsightResponse;
+    aiInsight = data.text;
+    aiInsightMeta = data.modeUsed === 'online'
+      ? `Online AI (${data.providerUsed.toUpperCase()})`
+      : `Mock mode · ${data.warning ?? 'Respuesta simulada activa.'}`;
+
+    if (aiOnlineSettings.rememberToken) {
+      persistTokenPreference();
+    }
+  } catch (e) {
+    error = `No se pudo generar el texto IA: ${String(e)}`;
+  } finally {
+    generatingInsight = false;
+    render();
+  }
 }
 
 function requiredReady() {
@@ -633,12 +723,37 @@ function renderQuoteTab() {
         <div class='flex justify-between'><span>Impuestos</span><span>${money(quoteResult.tax)}</span></div>
         <div class='flex justify-between font-bold text-xl'><span>Total</span><span>${money(quoteResult.total)}</span></div>
       </div>`}
-      <div class='mt-4'>
-        <button id='generateInsight' class='btn-muted w-full' ${generatingInsight || !quoteResult ? 'disabled' : ''}>${generatingInsight ? 'Generando análisis...' : 'Generar texto IA descriptivo (sin API)'}</button>
+      <div class='mt-4 space-y-3'>
+        <div class='rounded-lg border border-slate-200 dark:border-slate-700 p-3 space-y-3'>
+          <label class='inline-flex items-center gap-2 text-sm'>
+            <input id='ai_online_enabled' type='checkbox' ${aiOnlineSettings.enabled ? 'checked' : ''} />
+            Activar Modo Online
+          </label>
+          <p class='text-xs text-amber-600 dark:text-amber-300'>No uses llaves de producción en demos públicos.</p>
+          <div class='grid md:grid-cols-2 gap-2 ${aiOnlineSettings.enabled ? '' : 'opacity-70'}'>
+            <label>Proveedor
+              <select id='ai_provider' class='field' ${aiOnlineSettings.enabled ? '' : 'disabled'}>
+                <option value='openai' ${aiOnlineSettings.provider === 'openai' ? 'selected' : ''}>OpenAI</option>
+                <option value='gemini' ${aiOnlineSettings.provider === 'gemini' ? 'selected' : ''}>Gemini</option>
+              </select>
+            </label>
+            <label>Token (API key)
+              <input id='ai_token' class='field' type='password' autocomplete='off' placeholder='Pega tu token BYOK' value='${escapeHtml(aiOnlineSettings.token)}' ${aiOnlineSettings.enabled ? '' : 'disabled'} />
+            </label>
+          </div>
+          <div class='flex flex-wrap gap-2 items-center'>
+            <label class='inline-flex items-center gap-2 text-sm'>
+              <input id='ai_remember_token' type='checkbox' ${aiOnlineSettings.rememberToken ? 'checked' : ''} />
+              Remember token
+            </label>
+            <button id='clearAiToken' class='btn-danger'>Clear token</button>
+          </div>
+        </div>
+        <button id='generateInsight' class='btn-muted w-full' ${generatingInsight || !quoteResult ? 'disabled' : ''}>${generatingInsight ? 'Generando análisis...' : 'Generar texto IA'}</button>
         ${aiInsight ? `<article class='mt-3 rounded-lg border border-indigo-200 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 p-3'>
-          <h3 class='font-semibold text-sm'>Asistente IA local</h3>
-          <p class='mt-1 text-sm leading-relaxed'>${aiInsight}</p>
-        </article>` : `<p class='mt-2 text-xs text-slate-500'>Tip: genera un resumen comercial automático usando solo los datos de esta cotización.</p>`}
+          <h3 class='font-semibold text-sm'>Asistente IA · ${escapeHtml(aiInsightMeta || 'Resultado')}</h3>
+          <p class='mt-1 text-sm leading-relaxed'>${escapeHtml(aiInsight)}</p>
+        </article>` : `<p class='mt-2 text-xs text-slate-500'>Tip: en Modo Online llama al backend /api/generate; si falla, se usa Mock mode automáticamente.</p>`}
       </div>
     </section>
   </main>`;
@@ -744,6 +859,25 @@ function bindCommonEvents() {
     document.getElementById('extraStorageGb')?.addEventListener('input', e => pricingRequest.extraStorageGb = Number((e.target as HTMLInputElement).value));
     document.getElementById('taxRate')?.addEventListener('input', e => pricingRequest.taxRate = Number((e.target as HTMLInputElement).value));
     document.getElementById('prorationDays')?.addEventListener('input', e => pricingRequest.prorationDays = Number((e.target as HTMLInputElement).value));
+
+    document.getElementById('ai_online_enabled')?.addEventListener('change', e => {
+      aiOnlineSettings.enabled = (e.target as HTMLInputElement).checked;
+      render();
+    });
+    document.getElementById('ai_provider')?.addEventListener('change', e => {
+      aiOnlineSettings.provider = (e.target as HTMLSelectElement).value as AiProvider;
+    });
+    document.getElementById('ai_token')?.addEventListener('input', e => {
+      aiOnlineSettings.token = (e.target as HTMLInputElement).value;
+      if (aiOnlineSettings.rememberToken) {
+        persistTokenPreference();
+      }
+    });
+    document.getElementById('ai_remember_token')?.addEventListener('change', e => {
+      aiOnlineSettings.rememberToken = (e.target as HTMLInputElement).checked;
+      persistTokenPreference();
+    });
+    document.getElementById('clearAiToken')?.addEventListener('click', clearAiToken);
 
     document.getElementById('calculate')?.addEventListener('click', calculateQuote);
     document.getElementById('generateInsight')?.addEventListener('click', buildAiInsight);
