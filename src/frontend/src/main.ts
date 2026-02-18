@@ -1,8 +1,17 @@
 import './style.css';
 
-type Tab = 'quote' | 'company' | 'history';
-type Plan = { id: string; nombre: string; precioBaseMensual: number; usuariosIncluidos: number; storageIncluidoGb: number };
+type Tab = 'quote' | 'company' | 'catalog' | 'history';
+type Plan = {
+  id: string;
+  nombre: string;
+  precioBaseMensual: number;
+  usuariosIncluidos: number;
+  storageIncluidoGb: number;
+  costoPorUsuarioMensual?: number;
+};
 type Addon = { id: string; nombre: string; tipo: 'flat' | 'per_unit'; precio: number };
+type PricingRules = { costoPorUsuarioMensual: number; costoPor100GbMensual: number };
+type PricingCatalog = { currency: string; planes: Plan[]; addons: Addon[]; reglas: PricingRules };
 type PricingRequest = {
   planId: string;
   users: number;
@@ -51,9 +60,11 @@ let activeTab: Tab = 'quote';
 let dark = localStorage.getItem('dark') === 'true';
 let plans: Plan[] = [];
 let addons: Addon[] = [];
+let catalogDraft: PricingCatalog | null = null;
 let quoteResult: QuoteResponse | null = null;
 let error = '';
 let loading = false;
+let savingCatalog = false;
 let generatingPdf = false;
 let search = '';
 
@@ -86,7 +97,7 @@ function saveStorage(key: string, value: unknown) {
 function todayIso() { return new Date().toISOString().slice(0, 10); }
 
 function nextQuoteNumber() {
-  const datePart = todayIso().replaceAll('-', '');
+  const datePart = todayIso().split('-').join('');
   const countToday = quotes.filter(q => q.quoteMeta.quoteNumber.includes(`Q-${datePart}`)).length + 1;
   return `Q-${datePart}-${String(countToday).padStart(4, '0')}`;
 }
@@ -103,11 +114,10 @@ function money(v: number, currency = company.currency) {
 
 async function loadData() {
   try {
-    const [p, a] = await Promise.all([
-      fetch(`${API_BASE}/api/plans`).then(r => r.json()),
-      fetch(`${API_BASE}/api/addons`).then(r => r.json())
-    ]);
-    plans = p; addons = a;
+    const catalog: PricingCatalog = await fetch(`${API_BASE}/api/pricing`).then(r => r.json());
+    plans = catalog.planes;
+    addons = catalog.addons;
+    catalogDraft = structuredClone(catalog);
     if (plans.length) pricingRequest.planId = plans[0].id;
     if (!quoteMeta.quoteNumber) quoteMeta.quoteNumber = nextQuoteNumber();
   } catch {
@@ -253,6 +263,159 @@ async function downloadPdf(fromQuote?: StoredQuote) {
   }
 }
 
+function getCatalogSafe(): PricingCatalog {
+  if (!catalogDraft) {
+    return {
+      currency: 'USD',
+      planes: [],
+      addons: [],
+      reglas: { costoPorUsuarioMensual: 8, costoPor100GbMensual: 10 }
+    };
+  }
+  return catalogDraft;
+}
+
+function setCatalog(catalog: PricingCatalog) {
+  catalogDraft = catalog;
+}
+
+function updateRule(field: keyof PricingRules, value: number) {
+  const catalog = getCatalogSafe();
+  catalog.reglas[field] = Number.isFinite(value) ? value : 0;
+  setCatalog(catalog);
+}
+
+function updatePlan(index: number, field: keyof Plan, value: string | number) {
+  const catalog = getCatalogSafe();
+  const plan = catalog.planes[index];
+  if (!plan) return;
+  if (field === 'id' || field === 'nombre') {
+    (plan[field] as string) = String(value);
+  } else {
+    (plan[field] as number | undefined) = Number(value);
+  }
+  setCatalog(catalog);
+}
+
+function updateAddon(index: number, field: keyof Addon, value: string | number) {
+  const catalog = getCatalogSafe();
+  const addon = catalog.addons[index];
+  if (!addon) return;
+  if (field === 'tipo') addon.tipo = String(value) as Addon['tipo'];
+  else if (field === 'id' || field === 'nombre') (addon[field] as string) = String(value);
+  else addon.precio = Number(value);
+  setCatalog(catalog);
+}
+
+function addPlan() {
+  const catalog = getCatalogSafe();
+  catalog.planes.push({
+    id: `plan_${Date.now()}`,
+    nombre: 'Nuevo plan',
+    precioBaseMensual: 0,
+    usuariosIncluidos: 1,
+    storageIncluidoGb: 10,
+    costoPorUsuarioMensual: catalog.reglas.costoPorUsuarioMensual
+  });
+  setCatalog(catalog);
+  render();
+}
+
+function removePlan(index: number) {
+  const catalog = getCatalogSafe();
+  catalog.planes.splice(index, 1);
+  if (!catalog.planes.length) {
+    catalog.planes.push({
+      id: 'starter', nombre: 'Starter', precioBaseMensual: 0, usuariosIncluidos: 1, storageIncluidoGb: 10
+    });
+  }
+  setCatalog(catalog);
+  render();
+}
+
+function addAddon() {
+  const catalog = getCatalogSafe();
+  catalog.addons.push({ id: `addon_${Date.now()}`, nombre: 'Nuevo add-on', tipo: 'flat', precio: 0 });
+  setCatalog(catalog);
+  render();
+}
+
+function removeAddon(index: number) {
+  const catalog = getCatalogSafe();
+  catalog.addons.splice(index, 1);
+  setCatalog(catalog);
+  render();
+}
+
+function restoreCatalogTemplate() {
+  catalogDraft = {
+    currency: 'USD',
+    planes: [
+      { id: 'starter', nombre: 'Starter', precioBaseMensual: 19, usuariosIncluidos: 3, storageIncluidoGb: 50 },
+      { id: 'pro', nombre: 'Pro', precioBaseMensual: 49, usuariosIncluidos: 10, storageIncluidoGb: 200, costoPorUsuarioMensual: 6 }
+    ],
+    addons: [{ id: 'support_premium', nombre: 'Soporte premium', tipo: 'flat', precio: 149 }],
+    reglas: { costoPorUsuarioMensual: 8, costoPor100GbMensual: 10 }
+  };
+  render();
+}
+
+async function saveCatalog() {
+  const catalog = getCatalogSafe();
+  savingCatalog = true;
+  error = '';
+  render();
+
+  try {
+    if (!catalog.currency.trim()) throw new Error('La moneda es requerida.');
+    if (!catalog.planes.length) throw new Error('Debe existir al menos un plan.');
+
+    const normalized: PricingCatalog = {
+      currency: catalog.currency.trim().toUpperCase(),
+      planes: catalog.planes.map(p => ({
+        ...p,
+        id: p.id.trim(),
+        nombre: p.nombre.trim(),
+        precioBaseMensual: Number(p.precioBaseMensual),
+        usuariosIncluidos: Number(p.usuariosIncluidos),
+        storageIncluidoGb: Number(p.storageIncluidoGb),
+        costoPorUsuarioMensual: p.costoPorUsuarioMensual === undefined ? undefined : Number(p.costoPorUsuarioMensual)
+      })),
+      addons: catalog.addons.map(a => ({
+        ...a,
+        id: a.id.trim(),
+        nombre: a.nombre.trim(),
+        precio: Number(a.precio)
+      })),
+      reglas: {
+        costoPorUsuarioMensual: Number(catalog.reglas.costoPorUsuarioMensual),
+        costoPor100GbMensual: Number(catalog.reglas.costoPor100GbMensual)
+      }
+    };
+
+    const res = await fetch(`${API_BASE}/api/pricing`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(normalized)
+    });
+
+    if (!res.ok) throw new Error(await res.text());
+
+    const updated = await res.json() as PricingCatalog;
+    catalogDraft = updated;
+    plans = updated.planes;
+    addons = updated.addons;
+    if (!plans.some(p => p.id === pricingRequest.planId) && plans.length) {
+      pricingRequest.planId = plans[0].id;
+    }
+  } catch (e) {
+    error = `No se pudo guardar catálogo: ${String(e)}`;
+  } finally {
+    savingCatalog = false;
+    render();
+  }
+}
+
 function loadForDuplicate(item: StoredQuote) {
   Object.assign(company, item.company);
   Object.assign(customer, item.customer);
@@ -267,6 +430,90 @@ function removeQuote(id: string) {
   quotes = quotes.filter(q => q.id !== id);
   saveStorage('quotes_history', quotes);
   render();
+}
+
+function renderCatalogTab() {
+  const catalog = getCatalogSafe();
+  return `<section class='card'>
+    <div class='section-header'>
+      <div>
+        <h2 class='text-lg font-semibold'>Catálogo de servicios</h2>
+        <p class='text-sm text-slate-500 mt-1'>Edita precios y servicios con formularios (sin JSON manual).</p>
+      </div>
+      <div class='flex gap-2'>
+        <button id='restoreCatalogTemplate' class='btn-muted'>Plantilla</button>
+        <button id='saveCatalog' class='btn-primary'>${savingCatalog ? 'Guardando...' : 'Guardar catálogo'}</button>
+      </div>
+    </div>
+
+    <div class='catalog-grid mt-4'>
+      <article class='panel'>
+        <h3 class='panel-title'>Configuración general</h3>
+        <label>Moneda
+          <input id='catalog_currency' class='field' value='${catalog.currency}' />
+        </label>
+        <div class='grid md:grid-cols-2 gap-3 mt-3'>
+          <label>Costo por usuario/mes
+            <input id='rule_user' type='number' step='0.01' class='field' value='${catalog.reglas.costoPorUsuarioMensual}' />
+          </label>
+          <label>Costo por 100GB/mes
+            <input id='rule_storage' type='number' step='0.01' class='field' value='${catalog.reglas.costoPor100GbMensual}' />
+          </label>
+        </div>
+      </article>
+
+      <article class='panel'>
+        <div class='flex items-center justify-between'>
+          <h3 class='panel-title'>Planes</h3>
+          <button id='addPlan' class='btn-muted'>+ Plan</button>
+        </div>
+        <div class='space-y-3 mt-3'>
+          ${catalog.planes.map((plan, index) => `
+            <div class='item-card'>
+              <div class='grid md:grid-cols-2 gap-2'>
+                <label>ID<input data-plan='${index}' data-field='id' class='field' value='${plan.id}' /></label>
+                <label>Nombre<input data-plan='${index}' data-field='nombre' class='field' value='${plan.nombre}' /></label>
+                <label>Base mensual<input data-plan='${index}' data-field='precioBaseMensual' type='number' step='0.01' class='field' value='${plan.precioBaseMensual}' /></label>
+                <label>Usuarios incluidos<input data-plan='${index}' data-field='usuariosIncluidos' type='number' min='1' class='field' value='${plan.usuariosIncluidos}' /></label>
+                <label>Storage incluido (GB)<input data-plan='${index}' data-field='storageIncluidoGb' type='number' min='0' class='field' value='${plan.storageIncluidoGb}' /></label>
+                <label>Costo extra usuario<input data-plan='${index}' data-field='costoPorUsuarioMensual' type='number' step='0.01' class='field' value='${plan.costoPorUsuarioMensual ?? ''}' placeholder='Opcional' /></label>
+              </div>
+              <div class='text-right mt-2'>
+                <button data-remove-plan='${index}' class='btn-danger'>Eliminar plan</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </article>
+
+      <article class='panel'>
+        <div class='flex items-center justify-between'>
+          <h3 class='panel-title'>Add-ons</h3>
+          <button id='addAddon' class='btn-muted'>+ Add-on</button>
+        </div>
+        <div class='space-y-3 mt-3'>
+          ${catalog.addons.map((addon, index) => `
+            <div class='item-card'>
+              <div class='grid md:grid-cols-2 gap-2'>
+                <label>ID<input data-addon='${index}' data-field='id' class='field' value='${addon.id}' /></label>
+                <label>Nombre<input data-addon='${index}' data-field='nombre' class='field' value='${addon.nombre}' /></label>
+                <label>Tipo
+                  <select data-addon='${index}' data-field='tipo' class='field'>
+                    <option value='flat' ${addon.tipo === 'flat' ? 'selected' : ''}>Tarifa fija</option>
+                    <option value='per_unit' ${addon.tipo === 'per_unit' ? 'selected' : ''}>Por unidad</option>
+                  </select>
+                </label>
+                <label>Precio<input data-addon='${index}' data-field='precio' type='number' step='0.01' class='field' value='${addon.precio}' /></label>
+              </div>
+              <div class='text-right mt-2'>
+                <button data-remove-addon='${index}' class='btn-danger'>Eliminar add-on</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </article>
+    </div>
+  </section>`;
 }
 
 function renderCompanyTab() {
@@ -355,15 +602,15 @@ function renderHistoryTab() {
     <h2 class='font-semibold text-lg'>Cotizaciones</h2>
     <input id='search' placeholder='Buscar por cliente o número...' class='field mt-3' value='${search}' />
     <div class='mt-3 space-y-2'>
-      ${filtered.length === 0 ? `<p class='text-slate-500'>No hay cotizaciones.</p>` : filtered.map(q => `<div class='rounded-xl border border-slate-200 dark:border-slate-700 p-3'>
-        <div class='flex flex-wrap items-center justify-between gap-2'>
+      ${filtered.length === 0 ? `<p class='text-slate-500'>Sin resultados.</p>` : filtered.map(q => `<div class='border border-slate-200 dark:border-slate-700 rounded-lg p-3'>
+        <div class='flex flex-wrap justify-between items-center gap-2'>
           <div>
-            <p class='font-semibold'>${q.quoteMeta.quoteNumber}</p>
-            <p class='text-sm text-slate-500'>${q.customer.name} · ${q.customer.company || 'Sin empresa'} · ${money(q.pricingResult.total, q.company.currency)}</p>
+            <p class='font-medium'>${q.quoteMeta.quoteNumber} · ${q.customer.name}</p>
+            <p class='text-sm text-slate-500'>${new Date(q.createdAt).toLocaleString()}</p>
           </div>
-          <div class='flex gap-2 flex-wrap'>
-            <button class='btn-muted' data-action='view' data-id='${q.id}'>Ver detalle</button>
-            <button class='btn-muted' data-action='pdf' data-id='${q.id}'>Descargar PDF</button>
+          <div class='flex gap-2'>
+            <button class='btn-muted' data-action='view' data-id='${q.id}'>Ver</button>
+            <button class='btn-muted' data-action='pdf' data-id='${q.id}'>PDF</button>
             <button class='btn-muted' data-action='dup' data-id='${q.id}'>Duplicar</button>
             <button class='btn-muted' data-action='del' data-id='${q.id}'>Eliminar</button>
           </div>
@@ -379,28 +626,35 @@ function renderHistoryTab() {
 function render() {
   setTheme();
   app.innerHTML = `<div class='max-w-7xl mx-auto p-4 space-y-4'>
-    <header class='card flex flex-wrap items-center justify-between gap-2'>
+    <header class='card hero-header flex flex-wrap items-center justify-between gap-2'>
       <h1 class='text-xl font-bold'>SaaS Pricing Simulator</h1>
       <div class='flex gap-2'>
         <button class='btn-muted tab-btn ${activeTab === 'quote' ? 'ring-2 ring-indigo-500' : ''}' data-tab='quote'>Cotizar</button>
         <button class='btn-muted tab-btn ${activeTab === 'company' ? 'ring-2 ring-indigo-500' : ''}' data-tab='company'>Mi Empresa</button>
         <button class='btn-muted tab-btn ${activeTab === 'history' ? 'ring-2 ring-indigo-500' : ''}' data-tab='history'>Cotizaciones</button>
+        <button class='btn-muted tab-btn ${activeTab === 'catalog' ? 'ring-2 ring-indigo-500' : ''}' data-tab='catalog'>Catálogo</button>
         <button id='toggleDark' class='btn-muted'>${dark ? '☀️ Claro' : '🌙 Oscuro'}</button>
       </div>
     </header>
     ${error ? `<p class='card text-red-500'>${error}</p>` : ''}
-    ${activeTab === 'quote' ? renderQuoteTab() : activeTab === 'company' ? renderCompanyTab() : renderHistoryTab()}
+    ${activeTab === 'quote' ? renderQuoteTab() : activeTab === 'company' ? renderCompanyTab() : activeTab === 'catalog' ? renderCatalogTab() : renderHistoryTab()}
   </div>`;
 
-  document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => { activeTab = (btn as HTMLButtonElement).dataset.tab as Tab; render(); }));
-  document.getElementById('toggleDark')?.addEventListener('click', () => { dark = !dark; render(); });
+  document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => {
+    activeTab = (btn as HTMLButtonElement).dataset.tab as Tab;
+    render();
+  }));
+  document.getElementById('toggleDark')?.addEventListener('click', () => {
+    dark = !dark;
+    render();
+  });
 
   bindCommonEvents();
 }
 
 function bindCommonEvents() {
   const bindInput = <T extends object>(id: string, obj: T, key: keyof T) => {
-    document.getElementById(id)?.addEventListener('input', (e) => { (obj[key] as any) = (e.target as HTMLInputElement).value; });
+    document.getElementById(id)?.addEventListener('input', (e) => { (obj[key] as string) = (e.target as HTMLInputElement).value; });
   };
 
   if (activeTab === 'company') {
@@ -448,6 +702,47 @@ function bindCommonEvents() {
     document.getElementById('downloadPdf')?.addEventListener('click', () => downloadPdf());
   }
 
+  if (activeTab === 'catalog') {
+    const catalog = getCatalogSafe();
+
+    document.getElementById('catalog_currency')?.addEventListener('input', e => {
+      catalog.currency = (e.target as HTMLInputElement).value;
+    });
+    document.getElementById('rule_user')?.addEventListener('input', e => updateRule('costoPorUsuarioMensual', Number((e.target as HTMLInputElement).value)));
+    document.getElementById('rule_storage')?.addEventListener('input', e => updateRule('costoPor100GbMensual', Number((e.target as HTMLInputElement).value)));
+
+    document.querySelectorAll('[data-plan]').forEach(el => {
+      el.addEventListener('input', e => {
+        const target = e.target as HTMLInputElement;
+        const i = Number(target.dataset.plan);
+        const field = target.dataset.field as keyof Plan;
+        updatePlan(i, field, target.value);
+      });
+    });
+
+    document.querySelectorAll('[data-addon]').forEach(el => {
+      const evt = el.tagName === 'SELECT' ? 'change' : 'input';
+      el.addEventListener(evt, e => {
+        const target = e.target as HTMLInputElement | HTMLSelectElement;
+        const i = Number(target.dataset.addon);
+        const field = target.dataset.field as keyof Addon;
+        updateAddon(i, field, target.value);
+      });
+    });
+
+    document.querySelectorAll('[data-remove-plan]').forEach(btn => {
+      btn.addEventListener('click', () => removePlan(Number((btn as HTMLButtonElement).dataset.removePlan)));
+    });
+    document.querySelectorAll('[data-remove-addon]').forEach(btn => {
+      btn.addEventListener('click', () => removeAddon(Number((btn as HTMLButtonElement).dataset.removeAddon)));
+    });
+
+    document.getElementById('addPlan')?.addEventListener('click', addPlan);
+    document.getElementById('addAddon')?.addEventListener('click', addAddon);
+    document.getElementById('saveCatalog')?.addEventListener('click', saveCatalog);
+    document.getElementById('restoreCatalogTemplate')?.addEventListener('click', restoreCatalogTemplate);
+  }
+
   if (activeTab === 'history') {
     document.getElementById('search')?.addEventListener('input', e => { search = (e.target as HTMLInputElement).value; render(); });
     document.querySelectorAll('[data-action]').forEach(el => el.addEventListener('click', () => {
@@ -472,5 +767,7 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
-await loadData();
-render();
+(async () => {
+  await loadData();
+  render();
+})();
