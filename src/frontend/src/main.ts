@@ -1,8 +1,11 @@
 import './style.css';
 
-type Tab = 'quote' | 'company' | 'history';
-type Plan = { id: string; nombre: string; precioBaseMensual: number; usuariosIncluidos: number; storageIncluidoGb: number };
+type Tab = 'quote' | 'company' | 'catalog' | 'history';
+type Plan = { id: string; nombre: string; precioBaseMensual: number; usuariosIncluidos: number; storageIncluidoGb: number; costoPorUsuarioMensual?: number };
 type Addon = { id: string; nombre: string; tipo: 'flat' | 'per_unit'; precio: number };
+
+type PricingRules = { costoPorUsuarioMensual: number; costoPor100GbMensual: number };
+type PricingCatalog = { currency: string; planes: Plan[]; addons: Addon[]; reglas: PricingRules };
 type PricingRequest = {
   planId: string;
   users: number;
@@ -52,8 +55,10 @@ let dark = localStorage.getItem('dark') === 'true';
 let plans: Plan[] = [];
 let addons: Addon[] = [];
 let quoteResult: QuoteResponse | null = null;
+let catalogRaw = '';
 let error = '';
 let loading = false;
+let savingCatalog = false;
 let generatingPdf = false;
 let search = '';
 
@@ -86,7 +91,7 @@ function saveStorage(key: string, value: unknown) {
 function todayIso() { return new Date().toISOString().slice(0, 10); }
 
 function nextQuoteNumber() {
-  const datePart = todayIso().replaceAll('-', '');
+  const datePart = todayIso().split('-').join('');
   const countToday = quotes.filter(q => q.quoteMeta.quoteNumber.includes(`Q-${datePart}`)).length + 1;
   return `Q-${datePart}-${String(countToday).padStart(4, '0')}`;
 }
@@ -103,11 +108,10 @@ function money(v: number, currency = company.currency) {
 
 async function loadData() {
   try {
-    const [p, a] = await Promise.all([
-      fetch(`${API_BASE}/api/plans`).then(r => r.json()),
-      fetch(`${API_BASE}/api/addons`).then(r => r.json())
-    ]);
-    plans = p; addons = a;
+    const catalog: PricingCatalog = await fetch(`${API_BASE}/api/pricing`).then(r => r.json());
+    plans = catalog.planes;
+    addons = catalog.addons;
+    catalogRaw = JSON.stringify(catalog, null, 2);
     if (plans.length) pricingRequest.planId = plans[0].id;
     if (!quoteMeta.quoteNumber) quoteMeta.quoteNumber = nextQuoteNumber();
   } catch {
@@ -253,6 +257,66 @@ async function downloadPdf(fromQuote?: StoredQuote) {
   }
 }
 
+
+async function saveCatalog() {
+  savingCatalog = true;
+  error = '';
+  render();
+
+  try {
+    const parsed = JSON.parse(catalogRaw) as PricingCatalog;
+    const res = await fetch(`${API_BASE}/api/pricing`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(parsed)
+    });
+
+    if (!res.ok) throw new Error(await res.text());
+
+    const updated = await res.json() as PricingCatalog;
+    plans = updated.planes;
+    addons = updated.addons;
+    catalogRaw = JSON.stringify(updated, null, 2);
+    error = '';
+  } catch (e) {
+    error = `No se pudo guardar catálogo: ${String(e)}`;
+  } finally {
+    savingCatalog = false;
+    render();
+  }
+}
+
+function restoreCatalogTemplate() {
+  const template: PricingCatalog = {
+    currency: 'USD',
+    planes: [
+      { id: 'starter', nombre: 'Starter', precioBaseMensual: 19, usuariosIncluidos: 3, storageIncluidoGb: 50 },
+      { id: 'pro', nombre: 'Pro', precioBaseMensual: 49, usuariosIncluidos: 10, storageIncluidoGb: 200, costoPorUsuarioMensual: 6 }
+    ],
+    addons: [
+      { id: 'support_premium', nombre: 'Soporte premium', tipo: 'flat', precio: 149 }
+    ],
+    reglas: { costoPorUsuarioMensual: 8, costoPor100GbMensual: 10 }
+  };
+
+  catalogRaw = JSON.stringify(template, null, 2);
+  render();
+}
+
+function renderCatalogTab() {
+  return `<section class='card'>
+    <h2 class='text-lg font-semibold'>Catálogo de precios</h2>
+    <p class='text-sm text-slate-500 mt-2'>Edita planes, add-ons y reglas en formato JSON. Al guardar, el backend actualiza el archivo compartido para próximas cotizaciones.</p>
+    <label class='block mt-3'>Catálogo JSON
+      <textarea id='catalog_raw' class='field min-h-96 font-mono text-xs'>${catalogRaw}</textarea>
+    </label>
+    <div class='flex gap-2 mt-4'>
+      <button id='saveCatalog' class='btn-primary'>${savingCatalog ? 'Guardando...' : 'Guardar catálogo'}</button>
+      <button id='restoreCatalogTemplate' class='btn-muted'>Plantilla base</button>
+    </div>
+  </section>`;
+}
+
 function loadForDuplicate(item: StoredQuote) {
   Object.assign(company, item.company);
   Object.assign(customer, item.customer);
@@ -385,11 +449,12 @@ function render() {
         <button class='btn-muted tab-btn ${activeTab === 'quote' ? 'ring-2 ring-indigo-500' : ''}' data-tab='quote'>Cotizar</button>
         <button class='btn-muted tab-btn ${activeTab === 'company' ? 'ring-2 ring-indigo-500' : ''}' data-tab='company'>Mi Empresa</button>
         <button class='btn-muted tab-btn ${activeTab === 'history' ? 'ring-2 ring-indigo-500' : ''}' data-tab='history'>Cotizaciones</button>
+        <button class='btn-muted tab-btn ${activeTab === 'catalog' ? 'ring-2 ring-indigo-500' : ''}' data-tab='catalog'>Catálogo</button>
         <button id='toggleDark' class='btn-muted'>${dark ? '☀️ Claro' : '🌙 Oscuro'}</button>
       </div>
     </header>
     ${error ? `<p class='card text-red-500'>${error}</p>` : ''}
-    ${activeTab === 'quote' ? renderQuoteTab() : activeTab === 'company' ? renderCompanyTab() : renderHistoryTab()}
+    ${activeTab === 'quote' ? renderQuoteTab() : activeTab === 'company' ? renderCompanyTab() : activeTab === 'catalog' ? renderCatalogTab() : renderHistoryTab()}
   </div>`;
 
   document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => { activeTab = (btn as HTMLButtonElement).dataset.tab as Tab; render(); }));
@@ -448,6 +513,12 @@ function bindCommonEvents() {
     document.getElementById('downloadPdf')?.addEventListener('click', () => downloadPdf());
   }
 
+  if (activeTab === 'catalog') {
+    document.getElementById('catalog_raw')?.addEventListener('input', e => { catalogRaw = (e.target as HTMLTextAreaElement).value; });
+    document.getElementById('saveCatalog')?.addEventListener('click', saveCatalog);
+    document.getElementById('restoreCatalogTemplate')?.addEventListener('click', restoreCatalogTemplate);
+  }
+
   if (activeTab === 'history') {
     document.getElementById('search')?.addEventListener('input', e => { search = (e.target as HTMLInputElement).value; render(); });
     document.querySelectorAll('[data-action]').forEach(el => el.addEventListener('click', () => {
@@ -472,5 +543,7 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
-await loadData();
-render();
+(async () => {
+  await loadData();
+  render();
+})();
