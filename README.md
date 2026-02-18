@@ -46,7 +46,7 @@ Acciones:
 
 ## 3) Catálogo
 
-- Editor JSON para planes, add-ons y reglas de pricing.
+- Editor visual profesional para planes, add-ons y reglas de pricing (formularios, botones para agregar/eliminar y guardado directo).
 - Persistencia en backend sobre `src/backend/src/Infrastructure/data/pricing.json` (portable para despliegues sencillos y repos en GitHub).
 - Al guardar, las nuevas tarifas se aplican de inmediato en el cálculo de cotizaciones.
 
