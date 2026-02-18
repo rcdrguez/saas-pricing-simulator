@@ -4,7 +4,7 @@ Simulador full-stack para cotizaciones SaaS con motor de pricing en backend y ge
 
 ## Novedades (MVP)
 
-- Nueva navegación por tabs: **Cotizar**, **Mi Empresa**, **Cotizaciones**.
+- Nueva navegación por tabs: **Cotizar**, **Mi Empresa**, **Cotizaciones** y **Catálogo**.
 - Configuración de empresa persistida en `LocalStorage` (incluye logo base64).
 - Gestión de cotizaciones guardadas en `LocalStorage`.
 - Descarga de cotización en PDF vía backend (`POST /api/quotes/pdf`) usando QuestPDF.
@@ -44,7 +44,13 @@ Acciones:
 - **Guardar cambios**
 - **Restaurar ejemplo**
 
-## 3) Cotizaciones
+## 3) Catálogo
+
+- Editor JSON para planes, add-ons y reglas de pricing.
+- Persistencia en backend sobre `src/backend/src/Infrastructure/data/pricing.json` (portable para despliegues sencillos y repos en GitHub).
+- Al guardar, las nuevas tarifas se aplican de inmediato en el cálculo de cotizaciones.
+
+## 4) Cotizaciones
 
 - Lista histórica desde `LocalStorage`
 - Búsqueda por cliente o número
@@ -82,6 +88,12 @@ Retorna planes disponibles.
 
 ### GET `/api/addons`
 Retorna add-ons disponibles.
+
+### GET `/api/pricing`
+Retorna catálogo completo de pricing (planes, addons y reglas).
+
+### PUT `/api/pricing`
+Actualiza y persiste el catálogo completo en archivo JSON.
 
 ### POST `/api/quote`
 Calcula breakdown de pricing.
