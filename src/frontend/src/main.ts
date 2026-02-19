@@ -165,6 +165,13 @@ function escapeHtml(value: string) {
     .replace(/'/g, '&#39;');
 }
 
+function normalizeWebsiteUrl(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (/^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
 async function loadData() {
   try {
     const catalog: PricingCatalog = await fetch(`${API_BASE}/api/pricing`).then(r => r.json());
@@ -361,7 +368,10 @@ async function downloadPdf(fromQuote?: StoredQuote) {
 
   try {
     const payload = {
-      company: quoteData.company,
+      company: {
+        ...quoteData.company,
+        website: normalizeWebsiteUrl(quoteData.company.website)
+      },
       customer: quoteData.customer,
       quote: {
         quoteNumber: quoteData.quoteMeta.quoteNumber,
