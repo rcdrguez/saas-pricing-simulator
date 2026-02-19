@@ -85,7 +85,7 @@ type StoredQuote = {
   pricingResult: QuoteResponse;
 };
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'https://localhost:61050';
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'https://saas-pricing-simulator.onrender.com';
 const app = document.querySelector<HTMLDivElement>('#app')!;
 
 let activeTab: Tab = 'quote';
