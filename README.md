@@ -1,3 +1,5 @@
+<img width="1879" height="1006" alt="image" src="https://github.com/user-attachments/assets/7f7cafe8-63c1-436c-9cd3-29e03572775b" />
+
 # SaaS Pricing Simulator
 
 Simulador full-stack para cotizaciones SaaS con motor de pricing en backend y generación de PDF profesional bajo demanda.
