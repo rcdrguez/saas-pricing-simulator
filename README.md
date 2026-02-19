@@ -205,3 +205,23 @@ Proyecto con pruebas xUnit para el cálculo del motor de pricing (`src/backend/t
 ```bash
 docker compose up --build
 ```
+
+
+## Deploy en Render (API con Docker)
+
+Si Render muestra `failed to read dockerfile: open Dockerfile: no such file or directory`, configura el servicio para construir desde la **raíz** de este repo (donde está el `Dockerfile` root) o ajusta el Root Directory correctamente.
+
+### Pasos recomendados
+
+1. Crea un **Web Service** en Render conectado a este repositorio.
+2. Runtime: **Docker**.
+3. Root Directory: deja vacío (raíz del repo).
+4. Variables de entorno:
+   - `PORT=10000` (Render normalmente lo define automáticamente).
+   - `ASPNETCORE_ENVIRONMENT=Production`.
+5. Deploy.
+
+### Notas
+
+- El `Dockerfile` root publica `src/backend/src/Api/Api.csproj` y arranca con `dotnet Api.dll`.
+- Si despliegas también el frontend en otro dominio, recuerda permitir ese origen en CORS del backend.
