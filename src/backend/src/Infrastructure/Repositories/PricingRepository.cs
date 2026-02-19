@@ -73,7 +73,9 @@ public class PricingRepository : IPricingRepository
 
     private string GetCatalogPath()
     {
-        var path = Path.Combine(_env.ContentRootPath, "..", "Infrastructure", "data", "pricing.json");
+        var path = Path.Combine(_env.ContentRootPath, "data", "pricing.json");
         return Path.GetFullPath(path);
     }
 }
+
+ 

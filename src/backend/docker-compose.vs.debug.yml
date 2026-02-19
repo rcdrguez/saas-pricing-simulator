@@ -1,0 +1,16 @@
+version: '3.8'
+services:
+  api:
+    build:
+      context: .
+      dockerfile: src/Api/Dockerfile
+    image: saas-pricing-simulator_api:dev
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - DOTNET_USE_POLLING_FILE_WATCHER=1
+    ports:
+      - "8080:80"
+    volumes:
+      - ./:/workspace:ro
+    labels:
+      com.microsoft.visualstudio.debuggee: "true"

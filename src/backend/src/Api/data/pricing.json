@@ -1,0 +1,33 @@
+{
+  "currency": "USD",
+  "planes": [
+    {
+      "id": "starter",
+      "nombre": "Starter",
+      "precioBaseMensual": 19,
+      "usuariosIncluidos": 3,
+      "storageIncluidoGb": 50,
+      "costoPorUsuarioMensual": null
+    },
+    {
+      "id": "pro",
+      "nombre": "Pro",
+      "precioBaseMensual": 49,
+      "usuariosIncluidos": 10,
+      "storageIncluidoGb": 200,
+      "costoPorUsuarioMensual": 6
+    }
+  ],
+  "addons": [
+    {
+      "id": "support_premium",
+      "nombre": "Soporte premium",
+      "tipo": "flat",
+      "precio": 149
+    }
+  ],
+  "reglas": {
+    "costoPorUsuarioMensual": 8,
+    "costoPor100GbMensual": 10
+  }
+}
