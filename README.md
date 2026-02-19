@@ -224,4 +224,5 @@ Si Render muestra `failed to read dockerfile: open Dockerfile: no such file or d
 ### Notas
 
 - El `Dockerfile` root publica `src/backend/src/Api/Api.csproj` y arranca con `dotnet Api.dll`.
-- Si despliegas también el frontend en otro dominio, recuerda permitir ese origen en CORS del backend.
+- Configura `Cors__AllowedOrigins` (lista separada por comas) con los dominios del frontend permitidos; ejemplo: `https://tu-frontend.com,https://saas-pricing-simulator.onrender.com`.
+- Si no defines `Cors__AllowedOrigins`, el backend permite por defecto `http://localhost:5173` y `https://saas-pricing-simulator.onrender.com`.

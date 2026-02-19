@@ -17,8 +17,25 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("frontend", policy =>
     {
-        policy.WithOrigins("http://localhost:5173")
-            .AllowAnyHeader()
+        var origins = builder.Configuration["Cors:AllowedOrigins"]?
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(origin => Uri.TryCreate(origin, UriKind.Absolute, out _))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (origins is { Length: > 0 })
+        {
+            policy.WithOrigins(origins);
+        }
+        else
+        {
+            policy.WithOrigins(
+                "http://localhost:5173",
+                "https://saas-pricing-simulator.onrender.com"
+            );
+        }
+
+        policy.AllowAnyHeader()
             .AllowAnyMethod();
     });
 });
