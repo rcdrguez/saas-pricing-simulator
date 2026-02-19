@@ -117,12 +117,12 @@ const companyDefault: CompanySettings = {
 };
 
 const companyFallback: CompanySettings = {
-  name: 'Mi Empresa SaaS',
+  name: 'rcdrguez',
   rnc: '000000000',
   address: 'Dirección pendiente de completar',
   phone: '000-000-0000',
-  email: 'ventas@miempresa.com',
-  website: 'https://miempresa.com',
+  email: 'rcdrguez@outlook.com',
+  website: 'https://www.linkedin.com/in/rcdrguez/',
   currency: 'USD',
   legalNotes: 'Completa los datos fiscales de la empresa antes de enviar esta cotización al cliente.',
   logoBase64: ''
@@ -683,23 +683,43 @@ function renderCompanyTab() {
     <h2 class='text-lg font-semibold'>Mi Empresa</h2>
     <div class='grid md:grid-cols-2 gap-3 mt-3'>
       <label>Nombre comercial*<input id='company_name' class='field' value='${company.name}' /></label>
-      <label>RNC<input id='company_rnc' class='field' value='${company.rnc}' /></label>
-      <label>Dirección<input id='company_address' class='field' value='${company.address}' /></label>
-      <label>Teléfono<input id='company_phone' class='field' value='${company.phone}' /></label>
-      <label>Email<input id='company_email' class='field' value='${company.email}' /></label>
-      <label>Website<input id='company_website' class='field' value='${company.website}' /></label>
+      <label>RNC
+        <input id='company_rnc' class='field' value='${company.rnc}' />
+        <small class='text-xs text-slate-500'>Número fiscal de la empresa (9 a 11 dígitos).</small>
+      </label>
+      <label>Dirección
+        <input id='company_address' class='field' value='${company.address}' />
+        <small class='text-xs text-slate-500'>Dirección comercial o fiscal que aparecerá en la cotización.</small>
+      </label>
+      <label>Teléfono
+        <input id='company_phone' class='field' value='${company.phone}' />
+        <small class='text-xs text-slate-500'>Número de contacto para que el cliente pueda llamarte.</small>
+      </label>
+      <label>Email
+        <input id='company_email' class='field' value='${company.email}' />
+        <small class='text-xs text-slate-500'>Correo de contacto comercial para responder dudas.</small>
+      </label>
+      <label>Website
+        <input id='company_website' class='field' value='${company.website}' />
+        <small class='text-xs text-slate-500'>URL pública de tu web o perfil profesional (ej. LinkedIn).</small>
+      </label>
       <label>Moneda
         <select id='company_currency' class='field'>
           <option value='USD' ${company.currency === 'USD' ? 'selected' : ''}>USD</option>
           <option value='DOP' ${company.currency === 'DOP' ? 'selected' : ''}>DOP</option>
         </select>
+        <small class='text-xs text-slate-500'>Moneda usada para mostrar precios en la cotización.</small>
       </label>
       <label>Logo (PNG/JPG)
         <input id='company_logo' class='field' type='file' accept='image/png,image/jpeg' />
+        <small class='text-xs text-slate-500'>Opcional: se mostrará en el encabezado del PDF.</small>
       </label>
     </div>
     ${company.logoBase64 ? `<img src='${company.logoBase64}' class='mt-3 h-16 object-contain rounded bg-slate-100 p-2' />` : ''}
-    <label class='block mt-3'>Notas legales<textarea id='company_legalNotes' class='field min-h-20'>${company.legalNotes}</textarea></label>
+    <label class='block mt-3'>Notas legales
+      <textarea id='company_legalNotes' class='field min-h-20'>${company.legalNotes}</textarea>
+      <small class='text-xs text-slate-500'>Texto adicional sobre vigencia, condiciones o políticas de venta.</small>
+    </label>
     <div class='flex gap-2 mt-4'>
       <button id='saveCompany' class='btn-primary'>Guardar cambios</button>
       <button id='restoreCompany' class='btn-muted'>Restaurar ejemplo</button>
@@ -746,8 +766,6 @@ function renderQuoteTab() {
         <button id='calculate' class='btn-muted'>${loading ? 'Calculando...' : 'Calcular'}</button>
         <button id='saveQuote' class='btn-muted'>Guardar cotización</button>
       </div>
-      <button id='downloadPdf' class='btn-primary w-full mt-2' ${!requiredReady() ? 'disabled' : ''}>${generatingPdf ? 'Generando PDF...' : 'Generar PDF ahora'}</button>
-      <p class='text-xs text-slate-500 mt-2'>Tip: este botón ya puede generar el PDF incluso si no completaste datos de empresa.</p>
     </section>
     <section class='card'>
       <h2 class='font-semibold text-lg'>Breakdown</h2>
@@ -795,6 +813,8 @@ function renderQuoteTab() {
           </div>
         </div>
         <button id='generateInsight' class='btn-muted w-full' ${generatingInsight || !quoteResult ? 'disabled' : ''}>${generatingInsight ? 'Generando análisis...' : 'Generar texto IA'}</button>
+        <button id='downloadPdf' class='btn-primary w-full' ${!requiredReady() ? 'disabled' : ''}>${generatingPdf ? 'Generando PDF...' : 'Generar PDF ahora'}</button>
+        <p class='text-xs text-slate-500'>Tip: este botón ya puede generar el PDF incluso si no completaste datos de empresa.</p>
         ${aiInsight ? `<article class='mt-3 rounded-lg border border-indigo-200 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 p-3'>
           <h3 class='font-semibold text-sm'>Asistente IA · ${escapeHtml(aiInsightMeta || 'Resultado')}</h3>
           <p class='mt-1 text-sm leading-relaxed'>${escapeHtml(aiInsight)}</p>
