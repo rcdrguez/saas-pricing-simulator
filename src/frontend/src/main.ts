@@ -116,6 +116,18 @@ const companyDefault: CompanySettings = {
   name: '', rnc: '', address: '', phone: '', email: '', website: '', currency: 'USD', legalNotes: '', logoBase64: ''
 };
 
+const companyFallback: CompanySettings = {
+  name: 'Mi Empresa SaaS',
+  rnc: '000000000',
+  address: 'Dirección pendiente de completar',
+  phone: '000-000-0000',
+  email: 'ventas@miempresa.com',
+  website: 'https://miempresa.com',
+  currency: 'USD',
+  legalNotes: 'Completa los datos fiscales de la empresa antes de enviar esta cotización al cliente.',
+  logoBase64: ''
+};
+
 let company: CompanySettings = readStorage('company_settings', companyDefault);
 let quotes: StoredQuote[] = readStorage<StoredQuote[]>('quotes_history', []);
 
@@ -289,15 +301,24 @@ async function buildAiInsight() {
 }
 
 function requiredReady() {
-  return Boolean(company.name.trim() && customer.name.trim() && quoteMeta.quoteNumber.trim());
+  return Boolean(customer.name.trim() && quoteMeta.quoteNumber.trim());
+}
+
+function companyWithFallback(input: CompanySettings): CompanySettings {
+  return {
+    ...companyFallback,
+    ...input,
+    name: input.name.trim() || companyFallback.name,
+    rnc: input.rnc.trim() || companyFallback.rnc,
+    address: input.address.trim() || companyFallback.address,
+    phone: input.phone.trim() || companyFallback.phone,
+    email: input.email.trim() || companyFallback.email,
+    website: normalizeWebsiteUrl(input.website) || companyFallback.website,
+    legalNotes: input.legalNotes.trim() || companyFallback.legalNotes
+  };
 }
 
 function saveCompany() {
-  if (!company.name.trim()) {
-    error = 'El nombre comercial es requerido.';
-    render();
-    return;
-  }
   if (company.rnc && !/^\d{9,11}$/.test(company.rnc)) {
     error = 'El RNC debe contener de 9 a 11 dígitos.';
     render();
@@ -367,10 +388,10 @@ async function downloadPdf(fromQuote?: StoredQuote) {
   render();
 
   try {
+    const companyPayload = companyWithFallback(quoteData.company);
     const payload = {
       company: {
-        ...quoteData.company,
-        website: normalizeWebsiteUrl(quoteData.company.website)
+        ...companyPayload
       },
       customer: quoteData.customer,
       quote: {
@@ -691,6 +712,11 @@ function renderQuoteTab() {
   return `<main class='grid lg:grid-cols-2 gap-4'>
     <section class='card'>
       <h2 class='font-semibold text-lg'>Cotizar</h2>
+      <article class='onboarding-tip mt-3'>
+        <h3>Onboarding rápido</h3>
+        <p>Paso 1: llena datos del cliente y calcula. Paso 2: si quieres, completa <strong>Mi Empresa</strong>. Paso 3: genera tu PDF.</p>
+        <p class='text-xs mt-1'>Si dejas vacíos los datos de empresa, usaremos valores por defecto para no frenar la cotización.</p>
+      </article>
       <h3 class='font-semibold mt-3'>Cliente</h3>
       <div class='grid md:grid-cols-2 gap-3'>
         <label>Nombre cliente*<input id='customer_name' class='field' value='${customer.name}' /></label>
@@ -716,11 +742,12 @@ function renderQuoteTab() {
         <label>Prorrateo días<input id='prorationDays' type='number' min='0' max='30' class='field' value='${pricingRequest.prorationDays}'></label>
       </div>
       <label class='block mt-3'>Notas para cliente<textarea id='quote_notes' class='field min-h-20'>${quoteMeta.notes}</textarea></label>
-      <div class='grid md:grid-cols-3 gap-2 mt-4'>
-        <button id='calculate' class='btn-primary'>${loading ? 'Calculando...' : 'Calcular'}</button>
+      <div class='grid md:grid-cols-2 gap-2 mt-4'>
+        <button id='calculate' class='btn-muted'>${loading ? 'Calculando...' : 'Calcular'}</button>
         <button id='saveQuote' class='btn-muted'>Guardar cotización</button>
-        <button id='downloadPdf' class='btn-muted' ${!requiredReady() ? 'disabled' : ''}>${generatingPdf ? 'Generando PDF...' : 'Descargar PDF'}</button>
       </div>
+      <button id='downloadPdf' class='btn-primary w-full mt-2' ${!requiredReady() ? 'disabled' : ''}>${generatingPdf ? 'Generando PDF...' : 'Generar PDF ahora'}</button>
+      <p class='text-xs text-slate-500 mt-2'>Tip: este botón ya puede generar el PDF incluso si no completaste datos de empresa.</p>
     </section>
     <section class='card'>
       <h2 class='font-semibold text-lg'>Breakdown</h2>
@@ -740,6 +767,14 @@ function renderQuoteTab() {
             Activar Modo Online
           </label>
           <p class='text-xs text-amber-600 dark:text-amber-300'>No uses llaves de producción en demos públicos.</p>
+          <article class='onboarding-tip compact'>
+            <h3>BYOK para probar IA</h3>
+            <p>Puedes usar tu propio token para testear prompts con OpenAI o Gemini.</p>
+            <p class='text-xs mt-1'>Guías oficiales: 
+              <a href='https://platform.openai.com/docs/quickstart' target='_blank' rel='noreferrer'>OpenAI API Quickstart</a> ·
+              <a href='https://ai.google.dev/gemini-api/docs/api-key' target='_blank' rel='noreferrer'>Gemini API Key</a>
+            </p>
+          </article>
           <div class='grid md:grid-cols-2 gap-2 ${aiOnlineSettings.enabled ? '' : 'opacity-70'}'>
             <label>Proveedor
               <select id='ai_provider' class='field' ${aiOnlineSettings.enabled ? '' : 'disabled'}>
